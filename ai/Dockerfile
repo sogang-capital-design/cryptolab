@@ -1,0 +1,27 @@
+# ai/Dockerfile
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y \
+    redis-server \
+    libgomp1 \
+    build-essential \
+    bash \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY . /app
+RUN chmod +x /app/entrypoint.sh
+
+ENV PYTHONPATH=/app
+ENV CELERY_BROKER_URL=redis://localhost:6379/0
+ENV CELERY_RESULT_BACKEND=redis://localhost:6379/1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+EXPOSE 8000
+
+CMD ["/app/entrypoint.sh"]
