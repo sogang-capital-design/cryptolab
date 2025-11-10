@@ -1,5 +1,7 @@
 import logging
 
+from app.routers import auth_router, watchlist_router
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,6 +23,10 @@ app.include_router(decide.router, prefix="/decide", tags=["decide"])
 app.include_router(train.router, prefix="/train", tags=["train"])
 app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(models.router, prefix="/models", tags=["models"])
+
+app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
+app.include_router(watchlist_router.router, prefix="/watchlist", tags=["watchlist"])
+
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
