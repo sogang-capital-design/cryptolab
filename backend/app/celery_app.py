@@ -1,6 +1,9 @@
 # ai/celery_app.py
 import os
 from celery import Celery
+from dotenv import load_dotenv
+load_dotenv()
+
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 backend_url = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")

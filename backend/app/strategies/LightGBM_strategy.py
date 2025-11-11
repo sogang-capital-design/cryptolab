@@ -1,7 +1,9 @@
 import json
 import ta
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
+import shap
 from tqdm import tqdm
 
 from app.strategies.strategy import Strategy
@@ -12,11 +14,11 @@ class LightGBMStrategy(Strategy):
     inference_window = 100
     hyperparam_schema = {
         "buy_threshold": {
-            "default": 0.7,
+            "default": 0.05,
             "type": "float",
         },
         "sell_threshold": {
-            "default": 0.3,
+            "default": -0.05,
             "type": "float",
         },
         "learning_rate": {
@@ -24,7 +26,7 @@ class LightGBMStrategy(Strategy):
             "type": "float",
         },
         "num_leaves": {
-            "default": 31,
+            "default": 15,
             "type": "int",
         },
         "feature_fraction": {
@@ -55,8 +57,10 @@ class LightGBMStrategy(Strategy):
         sell_threshold = self._get_hyperparams('sell_threshold')
 
         features_df = self._feature_engineering(inference_df).dropna()
+        features_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
         model_input = features_df.iloc[-1].values.reshape(1, -1)
         model_output = float(self.model.predict(model_input)[0])
+        model_output = (np.exp(model_output) * 100) - 100
 
         if model_output < sell_threshold:
             action = -1  # Sell
@@ -73,13 +77,71 @@ class LightGBMStrategy(Strategy):
         else:
             amount = 0.0
         return action, amount
+    
+    def explain(self, train_df: pd.DataFrame, inference_df: pd.DataFrame) -> dict[str]:
+        train_df = self._feature_engineering(train_df).dropna()
+        train_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+        features_df = self._feature_engineering(inference_df).dropna()
+        features_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+        model_input = features_df.iloc[-1].values.reshape(1, -1)
+        explainer = shap.TreeExplainer(
+            self.model,
+            data=train_df,
+            feature_perturbation="interventional",
+            model_output="raw"
+        )
+        prediction = self.model.predict(model_input)[0]
+        prediction = (np.exp(prediction) * 100) - 100
+        shap_results = explainer(model_input)
+        features = shap_results.feature_names
+        shap_value_dict = dict(zip(features, shap_results.values[0]))
+        shap_value_dict = {k: float(v) for k, v in shap_value_dict.items()}
+        feature_value_dict = dict(zip(features, shap_results.data[0]))
+        feature_value_dict = {k: float(v) for k, v in feature_value_dict.items()}
+
+        explanation = {
+            "prediction": prediction,
+            "shap_values": shap_value_dict,
+            "feature_values": feature_value_dict,
+        }
+        return explanation
+    
+    def get_similar_train_data(self, train_df: pd.DataFrame, inference_df: pd.DataFrame, top_k: int = 5) -> dict:
+        if self.model is None:
+            raise RuntimeError("Model is not trained or loaded.")
+
+        train_fe = self._feature_engineering(train_df).dropna()
+        infer_fe = self._feature_engineering(inference_df).dropna()
+        drop_cols = ["open", "high", "low", "close", "volume"]
+        train_fe = train_fe.drop(columns=drop_cols, errors="ignore")
+        infer_fe = infer_fe.drop(columns=drop_cols, errors="ignore")
+
+        # 마지막 시점을 기준으로
+        ref_ts = infer_fe.index[-1]
+        ref_row = infer_fe.iloc[[-1]]
+
+        train_leaf = np.array(self.model.predict(train_fe, pred_leaf=True))
+        ref_leaf = np.array(self.model.predict(ref_row, pred_leaf=True))
+
+        train_leaf = train_leaf.reshape(train_fe.shape[0], -1)
+        ref_leaf = ref_leaf.reshape(-1)
+
+        n_trees = train_leaf.shape[1]
+        shared_ratio = (train_leaf == ref_leaf).sum(axis=1) / n_trees
+
+        top_idx = np.argsort(-shared_ratio)[:top_k]
+        similar_samples = [
+            {"timestamp": str(train_fe.index[i]), "similarity": float(shared_ratio[i])}
+            for i in top_idx
+        ]
+        return similar_samples
 
     def train(self, train_df: pd.DataFrame, hyperparams: dict) -> None:
         self.hyperparams = hyperparams
 
         lgb_hyperparams = {
-            'objective': 'binary',
-            'metric': 'binary_error',
+            'objective': 'regression_l1',
+            'metric': 'l1',
             'boosting_type': 'gbdt',
             'learning_rate': self._get_hyperparams('learning_rate'),
             'num_leaves': self._get_hyperparams('num_leaves'),
@@ -89,8 +151,11 @@ class LightGBMStrategy(Strategy):
         }
 
         data_df = self._feature_engineering(train_df).dropna()
-        X = data_df
-        y = (data_df["close"].pct_change().shift(-1) > 0).astype(int)
+        X = data_df.copy()
+        X.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+
+        # 로그 수익률 target
+        y = np.log(data_df["close"].shift(-1) / data_df["close"])
 
         X_valid_idx = X.isna().sum(axis=1) == 0
         y_valid_idx = y.notna()
@@ -117,28 +182,61 @@ class LightGBMStrategy(Strategy):
 
     def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
         data_df = df.copy()
-        data_df["trade_value"] = data_df["close"] * data_df["volume"]
+        trade_value = data_df["close"] * data_df["volume"]
+        data_df["trade_value_z_score"] = (trade_value - trade_value.mean()) / trade_value.std()
 
-        # 1) 거래 기반 지표
-        time_diffs = [1, 3, 6, 12, 24]
+        # 퍼센트 차이
+        time_diffs = [1, 2, 3, 6, 12, 24, 48]
         for time_diff in time_diffs:
-            data_df[f"price_change_{time_diff}h"] = data_df["close"].pct_change(time_diff)
-            data_df[f"volume_change_{time_diff}h"] = data_df["volume"].pct_change(time_diff)
-            data_df[f"trade_value_change_{time_diff}h"] = data_df["trade_value"].pct_change(time_diff)
+            data_df[f"price_pct_change_{time_diff}h"] = data_df["close"].pct_change(time_diff)
+            data_df[f"trade_value_pct_change_{time_diff}h"] = trade_value.pct_change(time_diff)
 
-        # 2) 기술적 지표
-        time_diffs = [12, 24, 48]
+        # 표준편차
+        time_windows = [4, 12, 24]
+        for time_window in time_windows:
+            data_df[f"price_std_{time_window}"] = data_df["close"].rolling(time_window).std()
+
+        # 볼린저 밴드
+        hband = ta.volatility.BollingerBands(data_df["close"]).bollinger_hband()
+        lband = ta.volatility.BollingerBands(data_df["close"]).bollinger_lband()
+        data_df['rel_dist_to_bb_upper'] = (hband - data_df["close"]) / data_df["close"]
+        data_df['rel_dist_to_bb_lower'] = (data_df["close"] - lband) / data_df["close"]
+
+        # RSI
+        data_df['rsi'] = ta.momentum.RSIIndicator(data_df["close"]).rsi()
+        time_diffs = [2, 6, 24]
         for time_diff in time_diffs:
-            data_df[f"rsi_{time_diff}"] = ta.momentum.RSIIndicator(data_df["close"], window=time_diff).rsi()
-            data_df[f"sma_{time_diff}"] = ta.trend.SMAIndicator(data_df["close"], window=time_diff).sma_indicator()
-            data_df[f"ema_{time_diff}"] = ta.trend.EMAIndicator(data_df["close"], window=time_diff).ema_indicator()
-        data_df["macd"] = ta.trend.MACD(data_df["close"]).macd()
-        data_df["bollinger_hband"] = ta.volatility.BollingerBands(data_df["close"]).bollinger_hband()
+            data_df[f'rsi_pct_change_{time_diff}'] = data_df['rsi'].pct_change(time_diff)
 
-        # 3) 시간 feature
+        # ADX
+        data_df['adx'] = ta.trend.ADXIndicator(data_df["high"], data_df["low"], data_df["close"]).adx()
+
+        # MACD
+        macd = ta.trend.MACD(data_df["close"]).macd()
+        macd_signal = ta.trend.MACD(data_df["close"]).macd_signal()
+        time_diffs = [2, 6, 24]
+        for time_diff in time_diffs:
+            data_df[f'macd_pct_change_{time_diff}'] = macd.pct_change(time_diff)
+        data_df['rel_dist_to_signal'] = (macd - macd_signal) / macd
+
+        # 최근 봉 관련 지표
+        for shift_interval in range(5):
+            close = data_df["close"].shift(shift_interval)
+            open = data_df["open"].shift(shift_interval)
+            high = data_df["high"].shift(shift_interval)
+            low = data_df["low"].shift(shift_interval)
+
+            body = abs(close - open)
+            rng = (high - low).replace(0, np.nan)
+            upper_wick = high - np.maximum(open, close)
+            lower_wick = np.minimum(open, close) - low
+            data_df[f"body_frac_{shift_interval}"] = body / rng
+            data_df[f"upper_wick_frac_{shift_interval}"] = upper_wick / rng
+            data_df[f"lower_wick_frac_{shift_interval}"] = lower_wick / rng
+            data_df[f'cur_pct_change_{shift_interval}'] = (close - open) / open
+
+        # 시간 feature
         data_df["hour"] = data_df.index.hour
-        data_df["dayofweek"] = data_df.index.dayofweek
-        data_df["is_weekend"] = (data_df["dayofweek"] >= 5).astype(int)
         return data_df
 
     def load(self, path: str) -> None:

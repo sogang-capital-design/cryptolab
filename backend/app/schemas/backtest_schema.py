@@ -13,7 +13,12 @@ class BacktestRequest(BaseModel):
 class BacktestResponse(BaseModel):
 	task_id: str
 
+class BacktestResult(BaseModel):
+	total_return: float
+	win_rate: float
+	trade_count: int
+
 class BacktestTaskResponse(BaseModel):
 	task_id: str
 	status: str
-	results: Dict[str, Any] = Field(default_factory=dict)
+	results: Optional[BacktestResult] = None

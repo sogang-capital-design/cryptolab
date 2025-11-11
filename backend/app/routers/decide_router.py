@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.decide_schema import DecisionRequest, DecisionResponse
@@ -20,7 +21,9 @@ async def decide(req: DecisionRequest) -> DecisionResponse:
 
     params_path = get_param_path(req.model_name, req.param_name)
     strategy_instance.load(params_path)
-    inference_df = total_df.iloc[-inference_window:]
+    inference_timestamp = pd.Timestamp(req.inference_time).tz_localize(None)
+    inference_iloc = total_df.index.get_loc(inference_timestamp)
+    inference_df = total_df.iloc[inference_iloc - inference_window:inference_iloc]
 
     action, amount = strategy_instance.action(
         inference_df=inference_df,

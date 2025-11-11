@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.celery_app import celery_app
-from app.schemas.backtest_schema import BacktestRequest, BacktestResponse, BacktestTaskResponse
+from app.schemas.backtest_schema import BacktestRequest, BacktestResponse, BacktestTaskResponse, BacktestResult
 from app.tasks.backtest_task import backtest_task
 
 router = APIRouter()
@@ -15,4 +15,5 @@ async def backtest(req: BacktestRequest) -> BacktestResponse:
 @router.get("/{task_id}", response_model=BacktestTaskResponse)
 async def get_backtest_task_status(task_id: str) -> BacktestTaskResponse:
     task = backtest_task.AsyncResult(task_id, app=celery_app)
-    return BacktestTaskResponse(task_id=task.id, status=task.status, results=task.result if task.successful() else {})
+    results = BacktestResult(**task.result) if task.successful() else None
+    return BacktestTaskResponse(task_id=task.id, status=task.status, results=results)
