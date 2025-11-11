@@ -1,43 +1,43 @@
+import json
 import ta
 import lightgbm as lgb
 import pandas as pd
 from tqdm import tqdm
 
 from app.strategies.strategy import Strategy
-from app.dataset import Dataset
 
-class LightGBM(Strategy):
+class LightGBMStrategy(Strategy):
 
     strategy_type = 'tree_based'
     inference_window = 100
     hyperparam_schema = {
         "buy_threshold": {
             "default": 0.7,
-            "options": [0.6, 0.7, 0.8, 0.9],
+            "type": "float",
         },
         "sell_threshold": {
             "default": 0.3,
-            "options": [0.1, 0.2, 0.3, 0.4],
+            "type": "float",
         },
         "learning_rate": {
             "default": 0.05,
-            "options": [0.001, 0.01, 0.05, 0.1],
+            "type": "float",
         },
         "num_leaves": {
             "default": 31,
-            "options": [15, 31, 63, 127],
+            "type": "int",
         },
         "feature_fraction": {
             "default": 0.9,
-            "options": [0.7, 0.8, 0.9, 1.0],
+            "type": "float",
         },
         "bagging_fraction": {
             "default": 0.9,
-            "options": [0.7, 0.8, 0.9, 1.0],
+            "type": "float",
         },
         "num_boost_round": {
-            "default": 200,
-            "options": [200, 500, 1000],
+            "default": 100,
+            "type": "int",
         },
     }
 
@@ -47,14 +47,14 @@ class LightGBM(Strategy):
         self.model = None
 
     def _get_hyperparams(self, name: str):
-        default = LightGBM.hyperparam_schema[name]['default']
+        default = LightGBMStrategy.hyperparam_schema[name]['default']
         return self.hyperparams.get(name, default)
 
-    def action(self, inference_dataset: Dataset, cash_balance: float, coin_balance: float) -> tuple[int, float]:
+    def action(self, inference_df: pd.DataFrame, cash_balance: float, coin_balance: float) -> tuple[int, float]:
         buy_threshold = self._get_hyperparams('buy_threshold')
         sell_threshold = self._get_hyperparams('sell_threshold')
 
-        features_df = self._feature_engineering(inference_dataset).dropna()
+        features_df = self._feature_engineering(inference_df).dropna()
         model_input = features_df.iloc[-1].values.reshape(1, -1)
         model_output = float(self.model.predict(model_input)[0])
 
@@ -65,7 +65,7 @@ class LightGBM(Strategy):
         else:
             action = 0
 
-        current_price = inference_dataset.data.iloc[-1]['Close']
+        current_price = inference_df.iloc[-1]['close']
         if action == -1:
             amount = coin_balance
         elif action == 1:
@@ -74,7 +74,7 @@ class LightGBM(Strategy):
             amount = 0.0
         return action, amount
 
-    def train(self, train_dataset: Dataset, hyperparams: dict) -> None:
+    def train(self, train_df: pd.DataFrame, hyperparams: dict) -> None:
         self.hyperparams = hyperparams
 
         lgb_hyperparams = {
@@ -85,13 +85,12 @@ class LightGBM(Strategy):
             'num_leaves': self._get_hyperparams('num_leaves'),
             'feature_fraction': self._get_hyperparams('feature_fraction'),
             'bagging_fraction': self._get_hyperparams('bagging_fraction'),
-            'bagging_freq': 1,
             "n_jobs": -1,
         }
 
-        data_df = self._feature_engineering(train_dataset).dropna()
+        data_df = self._feature_engineering(train_df).dropna()
         X = data_df
-        y = (data_df["Close"].pct_change().shift(-1) > 0).astype(int)
+        y = (data_df["close"].pct_change().shift(-1) > 0).astype(int)
 
         X_valid_idx = X.isna().sum(axis=1) == 0
         y_valid_idx = y.notna()
@@ -116,25 +115,25 @@ class LightGBM(Strategy):
         )
         print(self.model.params)
 
-    def _feature_engineering(self, dataset: Dataset) -> pd.DataFrame:
-        data_df = dataset.data.copy()
-        data_df["trade_value"] = data_df["Close"] * data_df["Volume"]
+    def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
+        data_df = df.copy()
+        data_df["trade_value"] = data_df["close"] * data_df["volume"]
 
         # 1) 거래 기반 지표
         time_diffs = [1, 3, 6, 12, 24]
         for time_diff in time_diffs:
-            data_df[f"price_change_{time_diff}h"] = data_df["Close"].pct_change(time_diff)
-            data_df[f"volume_change_{time_diff}h"] = data_df["Volume"].pct_change(time_diff)
+            data_df[f"price_change_{time_diff}h"] = data_df["close"].pct_change(time_diff)
+            data_df[f"volume_change_{time_diff}h"] = data_df["volume"].pct_change(time_diff)
             data_df[f"trade_value_change_{time_diff}h"] = data_df["trade_value"].pct_change(time_diff)
 
         # 2) 기술적 지표
         time_diffs = [12, 24, 48]
         for time_diff in time_diffs:
-            data_df[f"rsi_{time_diff}"] = ta.momentum.RSIIndicator(data_df["Close"], window=time_diff).rsi()
-            data_df[f"sma_{time_diff}"] = ta.trend.SMAIndicator(data_df["Close"], window=time_diff).sma_indicator()
-            data_df[f"ema_{time_diff}"] = ta.trend.EMAIndicator(data_df["Close"], window=time_diff).ema_indicator()
-        data_df["macd"] = ta.trend.MACD(data_df["Close"]).macd()
-        data_df["bollinger_hband"] = ta.volatility.BollingerBands(data_df["Close"]).bollinger_hband()
+            data_df[f"rsi_{time_diff}"] = ta.momentum.RSIIndicator(data_df["close"], window=time_diff).rsi()
+            data_df[f"sma_{time_diff}"] = ta.trend.SMAIndicator(data_df["close"], window=time_diff).sma_indicator()
+            data_df[f"ema_{time_diff}"] = ta.trend.EMAIndicator(data_df["close"], window=time_diff).ema_indicator()
+        data_df["macd"] = ta.trend.MACD(data_df["close"]).macd()
+        data_df["bollinger_hband"] = ta.volatility.BollingerBands(data_df["close"]).bollinger_hband()
 
         # 3) 시간 feature
         data_df["hour"] = data_df.index.hour
@@ -143,7 +142,17 @@ class LightGBM(Strategy):
         return data_df
 
     def load(self, path: str) -> None:
-        self.model = lgb.Booster(model_file=path)
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+            self.model = lgb.Booster(model_str=payload["model_str"])
+            self.hyperparams = payload["hyperparams"]
 
     def save(self, path: str) -> None:
-        self.model.save_model(path)
+        payload = {
+            "model_str": self.model.model_to_string(),
+            "hyperparams": self.hyperparams,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        

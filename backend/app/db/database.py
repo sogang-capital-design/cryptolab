@@ -1,11 +1,12 @@
-# ai/app/db/database.py
+# backend/app/db/database.py
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# ai/app/db/database.py -> ai/ (두 단계 위)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+from app.utils.data_utils import _get_data_path
+
+DATA_DIR = _get_data_path()
+DATA_DIR = os.path.join(DATA_DIR, "db")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DATA_DIR, "user.db")

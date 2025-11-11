@@ -2,13 +2,10 @@ import importlib
 import inspect
 import os
 
+from app.utils.data_utils import _get_data_path
 from app.strategies.strategy import Strategy
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {}
-
-def _make_hyperparams_key(hyperparams: dict):
-    hyperparams_str = {k: str(v) for k, v in hyperparams.items()}
-    return tuple(sorted(hyperparams_str.items()))
 
 def _get_strategies_dir() -> str:
     current_dir = os.path.dirname(__file__)
@@ -16,8 +13,8 @@ def _get_strategies_dir() -> str:
     return os.path.abspath(strategies_dir)
 
 def _get_params_dir() -> str:
-    current_dir = os.path.dirname(__file__)
-    params_dir = os.path.join(current_dir, '..', 'params')
+    params_dir = _get_data_path()
+    params_dir = os.path.join(params_dir, 'params')
     return os.path.abspath(params_dir)
 
 def _discover_strategies() -> None:
@@ -33,27 +30,31 @@ def _discover_strategies() -> None:
             spec.loader.exec_module(module)
             for name, obj in inspect.getmembers(module, inspect.isclass):
                 if issubclass(obj, Strategy) and obj is not Strategy:
+                    name = name.replace('Strategy', '')
                     STRATEGY_REGISTRY[name] = obj
 
-def get_strategy_class(name: str) -> type[Strategy]:
+def get_strategy_class(class_name: str) -> type[Strategy]:
     if not STRATEGY_REGISTRY:
         _discover_strategies()
-    if name not in STRATEGY_REGISTRY:
-        raise KeyError(f'Unknown strategy name: {name}. Available: {list(STRATEGY_REGISTRY.keys())}')
-    return STRATEGY_REGISTRY[name]
+    if class_name not in STRATEGY_REGISTRY:
+        raise KeyError(f'Unknown strategy name: {class_name}. Available: {list(STRATEGY_REGISTRY.keys())}')
+    return STRATEGY_REGISTRY[class_name]
 
-def get_params_path(model_type: str, model_name: str, hyperparams: dict, create_path: bool) -> str:
+def get_param_path(model_name: str, param_name: str) -> str:
     params_dir = _get_params_dir()
-    cur_params_dir = os.path.join(params_dir, model_type, model_name)
-    hyperparams_key = _make_hyperparams_key(hyperparams)
-    hyperparam_parts = [f"{k}={v}" for k, v in hyperparams_key]
-    file_name = model_name + '+' + '+'.join(hyperparam_parts) + '.crlb'
-    params_file_dir = os.path.join(cur_params_dir, file_name)
-
-    if not os.path.exists(cur_params_dir) or not os.path.exists(params_file_dir):
-        if create_path:
-            os.makedirs(cur_params_dir, exist_ok=True)
-        else:
-            raise FileNotFoundError(f'Parameters file not found: {params_file_dir}')
+    file_name = model_name + '+' + param_name + '.crlb'
+    params_file_dir = os.path.join(params_dir, file_name)
     return params_file_dir
 
+def get_all_param_names() -> dict[str, list[str]]:
+    params_dir = _get_params_dir()
+    params_dict: dict[str, list[str]] = {}
+    for file_name in os.listdir(params_dir):
+        if not file_name.endswith('.crlb'):
+            continue
+        model_class, model_name_with_ext = file_name.split('+')
+        model_name = model_name_with_ext.replace('.crlb', '')
+        if model_class not in params_dict:
+            params_dict[model_class] = []
+        params_dict[model_class].append(model_name)
+    return params_dict

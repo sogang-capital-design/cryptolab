@@ -1,7 +1,8 @@
 import random
+import pandas as pd
+import json
 
 from app.strategies.strategy import Strategy
-from app.dataset import Dataset
 
 class RandomStrategy(Strategy):
 
@@ -10,12 +11,11 @@ class RandomStrategy(Strategy):
     hyperparam_schema = {
         'buy_prob': {
             'default': 0.3,
-            'options': [0.1, 0.2, 0.3, 0.4, 0.5],
-
+            'type': 'float',
         },
         'sell_prob': {
             'default': 0.3,
-            'options': [0.1, 0.2, 0.3, 0.4, 0.5],
+            'type': 'float',
         }
     }
 
@@ -23,7 +23,7 @@ class RandomStrategy(Strategy):
         super().__init__()
         self.hyperparams = {}
 
-    def action(self, inference_dataset: Dataset, cash_balance: float, coin_balance: float) -> tuple[int, float]:
+    def action(self, inference_df: pd.DataFrame, cash_balance: float, coin_balance: float) -> tuple[int, float]:
         buy_prob = self.hyperparams.get('buy_prob', 0.3)
         sell_prob = self.hyperparams.get('sell_prob', 0.3)
 
@@ -35,7 +35,7 @@ class RandomStrategy(Strategy):
         else:
             action = 0  # Hold
 
-        current_price = inference_dataset.data.iloc[-1]['Close']
+        current_price = inference_df.iloc[-1]['close']
 
         if action == -1:
             amount = coin_balance
@@ -45,11 +45,13 @@ class RandomStrategy(Strategy):
             amount = 0.0
         return action, amount
 
-    def train(self, train_dataset: Dataset, hyperparams: dict) -> None:
+    def train(self, train_df: pd.DataFrame, hyperparams: dict) -> None:
         self.hyperparams = hyperparams
 
     def load(self, path: str) -> None:
-        pass  # No model
+        with open(path, 'r', encoding='utf-8') as f:
+            self.hyperparams = json.load(f)
 
     def save(self, path: str) -> None:
-        pass  # No model
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(self.hyperparams, f)

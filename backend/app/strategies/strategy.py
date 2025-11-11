@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 
-from app.dataset import Dataset
-
 class Strategy(ABC):
 
     strategy_type: str
@@ -10,11 +8,11 @@ class Strategy(ABC):
     hyperparam_schema: dict
 
     @abstractmethod
-    def action(self, inference_dataset: Dataset, cash_balance: float, coin_balance: float) -> tuple[int, float]:
+    def action(self, inference_df: pd.DataFrame, cash_balance: float, coin_balance: float) -> tuple[int, float]:
         pass
 
     @abstractmethod
-    def train(self, train_dataset: Dataset, hyperparams: dict) -> None:
+    def train(self, train_dataset: pd.DataFrame, hyperparams: dict) -> None:
         pass
 
     @abstractmethod

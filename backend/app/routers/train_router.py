@@ -8,9 +8,8 @@ router = APIRouter()
 
 @router.post("/", response_model=TrainResponse)
 async def train(req: TrainRequest) -> TrainResponse:
-    model_name, hyperparams = req.model_name, req.hyperparams
     train_start, train_end = req.start.isoformat(), req.end.isoformat()
-    task = train_task.delay(model_name, train_start, train_end, hyperparams)
+    task = train_task.delay(req.model_name, req.param_name, req.coin_symbol, req.timeframe, train_start, train_end, req.hyperparams)
     return TrainResponse(task_id=task.id)
 
 @router.get("/{task_id}", response_model=TrainTaskResponse)

@@ -9,11 +9,11 @@ router = APIRouter()
 
 @router.post("", response_model=WatchlistResponse)
 def set_watchlist(payload: WatchlistCreateRequest, db: Session = Depends(get_db), current=Depends(get_current_user)):
-    symbols = create_watchlist_once(db, current.id, payload.symbols)
-    return WatchlistResponse(symbols=[s.upper() for s in symbols])
+    symbols = create_watchlist_once(db, current.id, payload.coin_symbols)
+    return WatchlistResponse(coin_symbols=[s.upper() for s in symbols])
 
 @router.get("", response_model=WatchlistResponse)
 def read_watchlist(db: Session = Depends(get_db), current=Depends(get_current_user)):
     symbols = get_watchlist(db, current.id)
-    return WatchlistResponse(symbols=symbols)
+    return WatchlistResponse(coin_symbols=symbols)
 
