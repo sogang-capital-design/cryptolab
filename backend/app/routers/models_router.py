@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.models import ModelInfoRequest, ModelInfoResponse, ModelListResponse
+from app.schemas.models_schema import ModelInfoRequest, ModelInfoResponse, ModelListResponse
 from app.utils.model_load_utils import get_strategy_class, _discover_strategies, STRATEGY_REGISTRY
 
 router = APIRouter()

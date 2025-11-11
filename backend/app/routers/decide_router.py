@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.decide import DecisionRequest, DecisionResponse
+from app.schemas.decide_schema import DecisionRequest, DecisionResponse
 from app.utils.model_load_utils import get_strategy_class, get_params_path
 from app.utils.data_utils import get_total_dataset, get_n_last_rows
 

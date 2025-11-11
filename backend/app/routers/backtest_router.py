@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.celery_app import celery_app
-from app.schemas.backtest import BacktestRequest, BacktestResponse, BacktestTaskResponse
+from app.schemas.backtest_schema import BacktestRequest, BacktestResponse, BacktestTaskResponse
 from app.tasks.backtest_task import backtest_task
 
 router = APIRouter()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.celery_app import celery_app
-from app.schemas.train import TrainRequest, TrainResponse, TrainTaskResponse
+from app.schemas.train_schema import TrainRequest, TrainResponse, TrainTaskResponse
 from app.tasks.train_task import train_task
 
 router = APIRouter()
