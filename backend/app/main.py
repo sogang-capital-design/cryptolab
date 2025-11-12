@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import Base, engine
 from app.db import models as db_models
 from app.routers import auth_router, watchlist_router
-from app.routers import backtest_router, decide_router, models_router, train_router, explain_router
+from app.routers import data_router, models_router
+from app.routers import backtest_router, decide_router, train_router, explain_router
 
 # App
 app = FastAPI(title="cryptolab API", version="0.1.0")
@@ -27,6 +28,7 @@ app.include_router(train_router.router, prefix="/train", tags=["train"])
 app.include_router(backtest_router.router, prefix="/backtest", tags=["backtest"])
 app.include_router(models_router.router, prefix="/models", tags=["models"])
 app.include_router(explain_router.router, prefix="/explain", tags=["explain"])
+app.include_router(data_router.router, prefix="/data", tags=["data"])
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(watchlist_router.router, prefix="/watchlist", tags=["watchlist"])
 

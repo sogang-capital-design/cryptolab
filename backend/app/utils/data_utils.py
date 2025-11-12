@@ -13,6 +13,17 @@ def _get_ohlcv_path() -> str:
     ohlcv_path = os.path.join(data_path, 'ohlcv')
     return ohlcv_path
 
+def get_all_data_info() -> list[tuple[str, pd.Timestamp, pd.Timestamp]]:
+    data_path = _get_ohlcv_path()
+    data_info = []
+    for file_name in os.listdir(data_path):
+        _, coin_symbol, start_time, end_time, _ = file_name.split('_')
+        coin_symbol = coin_symbol.replace('KRW-', '').upper()
+        start_timestamp = pd.to_datetime(start_time)
+        end_timestamp = pd.to_datetime(end_time)
+        data_info.append((coin_symbol, start_timestamp, end_timestamp))
+    return data_info
+
 def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     coin_symbol = 'KRW-' + coin_symbol.upper()
     data_path = _get_ohlcv_path()
