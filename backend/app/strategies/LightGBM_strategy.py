@@ -204,8 +204,8 @@ class LightGBMStrategy(Strategy):
         # 퍼센트 차이
         time_diffs = [1, 2, 3, 6, 12, 24, 48]
         for time_diff in time_diffs:
-            data_df[f"price_pct_change_{time_diff}h"] = data_df["close"].pct_change(time_diff)
-            data_df[f"trade_value_pct_change_{time_diff}h"] = trade_value.pct_change(time_diff)
+            data_df[f"price_pct_change_{time_diff}h"] = data_df["close"].pct_change(time_diff, fill_method=None)
+            data_df[f"trade_value_pct_change_{time_diff}h"] = trade_value.pct_change(time_diff, fill_method=None)
 
         # 표준편차
         time_windows = [4, 12, 24]
@@ -222,7 +222,7 @@ class LightGBMStrategy(Strategy):
         data_df['rsi'] = ta.momentum.RSIIndicator(data_df["close"]).rsi()
         time_diffs = [2, 6, 24]
         for time_diff in time_diffs:
-            data_df[f'rsi_pct_change_{time_diff}'] = data_df['rsi'].pct_change(time_diff)
+            data_df[f'rsi_pct_change_{time_diff}'] = data_df['rsi'].pct_change(time_diff, fill_method=None)
 
         # ADX
         data_df['adx'] = ta.trend.ADXIndicator(data_df["high"], data_df["low"], data_df["close"]).adx()
@@ -232,7 +232,7 @@ class LightGBMStrategy(Strategy):
         macd_signal = ta.trend.MACD(data_df["close"]).macd_signal()
         time_diffs = [2, 6, 24]
         for time_diff in time_diffs:
-            data_df[f'macd_pct_change_{time_diff}'] = macd.pct_change(time_diff)
+            data_df[f'macd_pct_change_{time_diff}'] = macd.pct_change(time_diff, fill_method=None)
         data_df['rel_dist_to_signal'] = (macd - macd_signal) / macd
 
         # 최근 봉 관련 지표
