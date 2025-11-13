@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import openai
 
@@ -6,7 +7,7 @@ from app.utils.model_load_utils import get_strategy_class, get_param_path
 from app.utils.data_utils import get_ohlcv_df
 
 @celery_app.task(bind=True)
-def explain_task(self, coin_symbol: str, timeframe: int, inference_time: str) -> dict:
+def explain_model_task(self, coin_symbol: str, timeframe: int, inference_time: str) -> dict:
     MODEL_NAME = "LightGBM"
     PARAM_NAME = f"{coin_symbol}_{timeframe}m"
     TRAIN_START = "2024-01-01 00:00:00"
@@ -37,20 +38,20 @@ def explain_task(self, coin_symbol: str, timeframe: int, inference_time: str) ->
         inference_df=inference_df
     )
 
-    print('Finding similar training data...')
-    similar_charts = strategy_instance.get_similar_train_data(
+    print('Finding reference training data...')
+    reference_charts = strategy_instance.get_reference_train_data(
         train_df=train_df,
         inference_df=inference_df,
         top_k=5
     )
-    explanation["similar_charts"] = similar_charts
+    explanation["reference_charts"] = reference_charts
 
     print('Creating LLM explanation...')
-    explanation_text = get_explanation_text(explanation)
+    explanation_text = get_model_explanation_text(explanation)
     explanation["explanation_text"] = explanation_text
     return explanation
 
-def get_explanation_text(explanation_values: dict[dict]) -> str:
+def get_model_explanation_text(explanation_values: dict[dict]) -> str:
     prediction_value = explanation_values["prediction"]
     shap_value_dict = explanation_values["shap_values"]
     feature_value_dict = explanation_values["feature_values"]
@@ -62,7 +63,7 @@ def get_explanation_text(explanation_values: dict[dict]) -> str:
     )
     client = openai.OpenAI()
     response = client.chat.completions.create(
-        model='gpt-5-nano',
+        model='gpt-5.1-chat-latest',
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}

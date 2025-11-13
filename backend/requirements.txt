@@ -335,6 +335,15 @@ dnspython==2.8.0 \
     --hash=sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af \
     --hash=sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f
     # via email-validator
+dtaidistance==2.3.13 \
+    --hash=sha256:02f2de97f147cd17c7de1b19140d3a5f48d876c19ae28105c12cca45f9af2520 \
+    --hash=sha256:465f45d380a1cd4416201a9aeffa9fdf34848db10fe66918456d616989d61316 \
+    --hash=sha256:a09b9916f8ecbf11ef3f8824bfb306c1c3bfc63a32dcb4703551a1d5bbe6fa6c \
+    --hash=sha256:ac8536147977419a2ab5b4a89d97d91bbaf8ea339d91bbb63e26bea0a842ec5e \
+    --hash=sha256:b0344a9b6f642863fcedacf5de86c4a0a0d4b4adec9b9be561a6f513ecf5e695 \
+    --hash=sha256:c61ef66588cac8b1f2ec7c8a7ca15bc6ae058804f8e5514919a0b682818fa60a \
+    --hash=sha256:d071392388dab99462922df8e4fb99f905e59888bd7246dee318ba7fe0d6332d
+    # via cryptolab-backend
 ecdsa==0.19.1 \
     --hash=sha256:30638e27cf77b7e15c4c4cc1973720149e1033827cfd00661ca5c8cc0cdb24c3 \
     --hash=sha256:478cba7b62555866fcb3bb3fe985e06decbdb68ef55713c4e5ab98c57d508e61
@@ -756,6 +765,7 @@ numpy==2.3.4 \
     --hash=sha256:fea80f4f4cf83b54c3a051f2f727870ee51e22f0248d3114b8e755d160b38cfb
     # via
     #   cryptolab-backend
+    #   dtaidistance
     #   lightgbm
     #   numba
     #   pandas
