@@ -29,8 +29,10 @@ def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     data_path = _get_ohlcv_path()
     for file_name in os.listdir(data_path):
         _, cur_coin_symbol, start_time, end_time, timeframe_with_csv = file_name.split('_')
-        cur_timeframe = timeframe_with_csv.replace('m.csv', '')
-        if coin_symbol == cur_coin_symbol and timeframe == int(cur_timeframe):
+        if coin_symbol == cur_coin_symbol:
+            data_timeframe = int(timeframe_with_csv.replace('m.csv', ''))
+            if timeframe % data_timeframe != 0:
+                raise ValueError(f"Requested timeframe {timeframe} is not a multiple of data timeframe {data_timeframe}.")
             break
     else:
         raise FileNotFoundError("No matching data file found.")
@@ -40,4 +42,14 @@ def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
         parse_dates=['datetime']
     )
     data_df = data_df.set_index("datetime").sort_index()
+
+    def resample_to_minutes(df: pd.DataFrame, min: int) -> pd.DataFrame:
+        df_resampled = pd.DataFrame()
+        df_resampled['open']  = df['open'].resample(f'{min}min').first()
+        df_resampled['high']  = df['high'].resample(f'{min}min').max()
+        df_resampled['low']   = df['low'].resample(f'{min}min').min()
+        df_resampled['close'] = df['close'].resample(f'{min}min').last()
+        df_resampled['volume'] = df['volume'].resample(f'{min}min').sum()
+        return df_resampled
+    data_df = resample_to_minutes(data_df, timeframe).copy()
     return data_df

@@ -33,9 +33,9 @@ class LightGBMStrategy(Strategy):
             "default": 0.9,
             "type": "float",
         },
-        "bagging_fraction": {
-            "default": 0.9,
-            "type": "float",
+        "min_data_in_leaf": {
+            "default": 20,
+            "type": "int",
         },
         "num_boost_round": {
             "default": 100,
@@ -146,7 +146,7 @@ class LightGBMStrategy(Strategy):
             'learning_rate': self._get_hyperparams('learning_rate'),
             'num_leaves': self._get_hyperparams('num_leaves'),
             'feature_fraction': self._get_hyperparams('feature_fraction'),
-            'bagging_fraction': self._get_hyperparams('bagging_fraction'),
+            'min_data_in_leaf': self._get_hyperparams('min_data_in_leaf'),
             "n_jobs": -1,
         }
 
@@ -162,6 +162,22 @@ class LightGBMStrategy(Strategy):
         valid_idx = X_valid_idx & y_valid_idx
         X = X[valid_idx]
         y = y[valid_idx]
+
+        def balance_indices(y, random_state=42):
+            rng = np.random.default_rng(random_state)
+            pos_idx = np.where(y > 0)[0]
+            neg_idx = np.where(y <= 0)[0]
+            
+            n = min(len(pos_idx), len(neg_idx))
+            pos_sample = rng.choice(pos_idx, n, replace=False)
+            neg_sample = rng.choice(neg_idx, n, replace=False)
+            
+            sel_idx = np.sort(np.concatenate([pos_sample, neg_sample]))
+            return sel_idx
+
+        sel_idx = balance_indices(y)
+        X = X.iloc[sel_idx]
+        y = y.iloc[sel_idx]
 
         def tqdm_bar_callback(total_rounds):
             pbar = tqdm(total=total_rounds, desc="LightGBM Training", leave=True)

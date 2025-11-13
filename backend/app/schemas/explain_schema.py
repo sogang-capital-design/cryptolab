@@ -3,12 +3,8 @@ from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 
 class ExplainRequest(BaseModel):
-	model_name: str
-	param_name: str
 	coin_symbol: str
 	timeframe: int
-	train_start: datetime
-	train_end: datetime
 	inference_time: datetime
 
 class ExplainResponse(BaseModel):

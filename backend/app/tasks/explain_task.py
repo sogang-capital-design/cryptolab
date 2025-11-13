@@ -6,20 +6,25 @@ from app.utils.model_load_utils import get_strategy_class, get_param_path
 from app.utils.data_utils import get_ohlcv_df
 
 @celery_app.task(bind=True)
-def explain_task(self, model_name: str, param_name: str, coin_symbol: str, timeframe: int, train_start: str, train_end: str, inference_time: str) -> dict:
+def explain_task(self, coin_symbol: str, timeframe: int, inference_time: str) -> dict:
+    MODEL_NAME = "LightGBM"
+    PARAM_NAME = f"{coin_symbol}_{timeframe}m"
+    TRAIN_START = "2024-01-01 00:00:00"
+    TRAIN_END = "2025-01-01 00:00:00"
     total_df = get_ohlcv_df(
         coin_symbol=coin_symbol,
         timeframe=timeframe
     )
-    strategy_class = get_strategy_class(model_name)
+    strategy_class = get_strategy_class(MODEL_NAME)
     inference_window = strategy_class.inference_window
     strategy_instance = strategy_class()
 
-    params_path = get_param_path(model_name, param_name)
+    params_path = get_param_path(MODEL_NAME, PARAM_NAME)
     strategy_instance.load(params_path)
 
-    train_start_timestamp = pd.Timestamp(train_start).tz_localize(None)
-    train_end_timestamp = pd.Timestamp(train_end).tz_localize(None)
+    train_start_timestamp = pd.Timestamp(TRAIN_START).tz_localize(None)
+    train_start_timestamp -= pd.Timedelta(minutes=timeframe)
+    train_end_timestamp = pd.Timestamp(TRAIN_END).tz_localize(None)
     train_df = total_df.loc[train_start_timestamp:train_end_timestamp]
 
     inference_timestamp = pd.Timestamp(inference_time).tz_localize(None)
