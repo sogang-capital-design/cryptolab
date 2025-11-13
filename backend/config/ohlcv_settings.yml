@@ -1,0 +1,13 @@
+pairs:
+  - symbol: "KRW-BTC"
+    base_timeframe: "60m"
+    target_timeframes:
+      - "60m"
+      - "240m"
+      - "1d"
+  - symbol: "KRW-ETH"
+    base_timeframe: "60m"
+    target_timeframes:
+      - "60m"
+      - "240m"
+      - "1d"
