@@ -14,7 +14,6 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
-RUN chmod +x /app/entrypoint.sh
 
 ENV PYTHONPATH=/app
 ENV CELERY_BROKER_URL=redis://localhost:6379/0
@@ -24,4 +23,4 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8000
 
-CMD ["/app/entrypoint.sh"]
+CMD ["python", "/app/entrypoint.py"]
