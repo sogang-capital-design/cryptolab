@@ -1,11 +1,15 @@
 # ai/Dockerfile
-FROM python:3.11-slim
 
+# 1. 'trixie' 대신 'bookworm' (안정 버전)을 사용하도록 명시합니다.
+FROM python:3.11-slim-bookworm
+
+# 2. 'dos2unix' 패키지를 설치 목록에 추가
 RUN apt-get update && apt-get install -y \
     redis-server \
     libgomp1 \
     build-essential \
     bash \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,6 +18,9 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
+
+# 3. 실행 권한 주기 전에, 파일을 리눅스 형식으로 변환
+RUN dos2unix /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 ENV PYTHONPATH=/app
