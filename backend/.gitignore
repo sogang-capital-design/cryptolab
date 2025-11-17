@@ -5,3 +5,4 @@ dump.rdb
 .env
 .pytest_cache/
 data/db/user.db
+celerybeat-schedule
