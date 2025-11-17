@@ -99,6 +99,29 @@ class LightGBMStrategy(Strategy):
         feature_value_dict = dict(zip(features, shap_results.data[0]))
         feature_value_dict = {k: float(v) for k, v in feature_value_dict.items()}
 
+        sorted_items = sorted(
+            shap_value_dict.items(),
+            key=lambda x: abs(x[1]),
+            reverse=True
+        )
+        TOPK = 10
+
+        topk_features = []
+        price_selected = False
+
+        for feat, val in sorted_items:
+            # price_pct_change_* 는 하나만 선택
+            if feat.startswith("price_pct_change"):
+                if price_selected:
+                    continue
+                price_selected = True
+            topk_features.append(feat)
+            if len(topk_features) >= TOPK:
+                break
+
+        shap_value_dict = {k: shap_value_dict[k] for k in topk_features}
+        feature_value_dict = {k: feature_value_dict[k] for k in topk_features}
+
         explanation = {
             "prediction": prediction,
             "shap_values": shap_value_dict,
@@ -106,7 +129,7 @@ class LightGBMStrategy(Strategy):
         }
         return explanation
     
-    def get_similar_train_data(self, train_df: pd.DataFrame, inference_df: pd.DataFrame, top_k: int = 5) -> dict:
+    def get_reference_train_data(self, train_df: pd.DataFrame, inference_df: pd.DataFrame, top_k: int = 5) -> dict:
         if self.model is None:
             raise RuntimeError("Model is not trained or loaded.")
 

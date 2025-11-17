@@ -18,7 +18,6 @@ COPY requirements.txt /app/requirements.txt
 RUN $VIRTUAL_ENV/bin/pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
-RUN chmod +x /app/entrypoint.sh
 
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 ENV PYTHONPATH=/app
@@ -29,4 +28,4 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8000
 
-CMD ["/app/entrypoint.sh"]
+CMD ["python", "/app/entrypoint.py"]
