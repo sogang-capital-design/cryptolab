@@ -1,55 +1,87 @@
 import os
-import pandas as pd
+from typing import TYPE_CHECKING, List, Tuple
 
-from app.strategies.strategy import Strategy
+import pandas as pd
+from sqlalchemy import func, select
+
+if TYPE_CHECKING:
+    from app.services.ohlcv_service import OHLCVIngestService
+
+_ingest_service: "OHLCVIngestService | None" = None
+
 
 def _get_data_path() -> str:
     current_dir = os.path.dirname(__file__)
-    data_dir = os.path.abspath(os.path.join(current_dir, '..', '..', 'data'))
+    data_dir = os.path.abspath(os.path.join(current_dir, "..", "..", "data"))
     return data_dir
 
-def _get_ohlcv_path() -> str:
-    data_path = _get_data_path()
-    ohlcv_path = os.path.join(data_path, 'ohlcv')
-    return ohlcv_path
 
-def get_all_data_info() -> list[tuple[str, pd.Timestamp, pd.Timestamp]]:
-    data_path = _get_ohlcv_path()
-    data_info = []
-    for file_name in os.listdir(data_path):
-        _, coin_symbol, start_time, end_time, _ = file_name.split('_')
-        coin_symbol = coin_symbol.replace('KRW-', '').upper()
-        start_timestamp = pd.to_datetime(start_time)
-        end_timestamp = pd.to_datetime(end_time)
-        data_info.append((coin_symbol, start_timestamp, end_timestamp))
+def _minutes_to_timeframe_label(minutes: int) -> str:
+    if minutes <= 0:
+        raise ValueError("Timeframe must be positive.")
+    if minutes % (60 * 24) == 0:
+        days = minutes // (60 * 24)
+        return f"{days}d"
+    return f"{minutes}m"
+
+
+def _get_ingest_service():
+    global _ingest_service
+    if _ingest_service is None:
+        from app.services.ohlcv_service import OHLCVIngestService
+
+        _ingest_service = OHLCVIngestService()
+    return _ingest_service
+
+
+def get_all_data_info() -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
+    from app.db import models
+    from app.db.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        query = (
+            select(
+                models.OHLCVRange.symbol,
+                models.OHLCVRange.timeframe,
+                func.min(models.OHLCVRange.start_timestamp),
+                func.max(models.OHLCVRange.end_timestamp),
+            )
+            .group_by(models.OHLCVRange.symbol, models.OHLCVRange.timeframe)
+            .order_by(models.OHLCVRange.symbol, models.OHLCVRange.timeframe)
+        )
+        rows = session.execute(query).all()
+    finally:
+        session.close()
+
+    data_info: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
+    for symbol, timeframe, start, end in rows:
+        if not start or not end:
+            continue
+        coin_symbol = symbol.replace("KRW-", "").upper()
+        data_info.append((coin_symbol, pd.Timestamp(start), pd.Timestamp(end)))
     return data_info
 
+
 def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
-    coin_symbol = 'KRW-' + coin_symbol.upper()
-    data_path = _get_ohlcv_path()
-    for file_name in os.listdir(data_path):
-        _, cur_coin_symbol, start_time, end_time, timeframe_with_csv = file_name.split('_')
-        if coin_symbol == cur_coin_symbol:
-            data_timeframe = int(timeframe_with_csv.replace('m.csv', ''))
-            if timeframe % data_timeframe != 0:
-                raise ValueError(f"Requested timeframe {timeframe} is not a multiple of data timeframe {data_timeframe}.")
-            break
-    else:
-        raise FileNotFoundError("No matching data file found.")
+    symbol = "KRW-" + coin_symbol.upper()
+    timeframe_label = _minutes_to_timeframe_label(timeframe)
 
-    data_df = pd.read_csv(
-        os.path.join(data_path, file_name),
-        parse_dates=['datetime']
-    )
-    data_df = data_df.set_index("datetime").sort_index()
+    # Validate timeframe exists in configuration
+    ingest_service = _get_ingest_service()
+    cfg = ingest_service.get_config(symbol)
+    available = {tf.raw for tf in cfg.targets}
+    if timeframe_label not in available:
+        raise ValueError(f"Timeframe '{timeframe_label}' not available for {symbol}. Available: {sorted(available)}")
 
-    def resample_to_minutes(df: pd.DataFrame, min: int) -> pd.DataFrame:
-        df_resampled = pd.DataFrame()
-        df_resampled['open']  = df['open'].resample(f'{min}min').first()
-        df_resampled['high']  = df['high'].resample(f'{min}min').max()
-        df_resampled['low']   = df['low'].resample(f'{min}min').min()
-        df_resampled['close'] = df['close'].resample(f'{min}min').last()
-        df_resampled['volume'] = df['volume'].resample(f'{min}min').sum()
-        return df_resampled
-    data_df = resample_to_minutes(data_df, timeframe).copy()
-    return data_df
+    from app.db.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        df = ingest_service.dataframe_for_range(session, symbol, timeframe_label)
+    finally:
+        session.close()
+
+    if df.empty:
+        raise ValueError(f"No OHLCV data available for {coin_symbol} at {timeframe_label}.")
+    return df
