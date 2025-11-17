@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import yaml
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -201,12 +201,13 @@ def load_symbol_configs(config_path: str, default_targets: Sequence[str]) -> lis
 
 
 class UpbitClient:
-    def __init__(self, base_url: str, cooldown_seconds: float) -> None:
+    def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
-        self.cooldown = cooldown_seconds
         self.session = requests.Session()
         self._lock = threading.Lock()
         self._last_call = 0.0
+        self._next_delay = 0.0
+        self._max_http_retry = 3
 
     def fetch_candles(
         self,
@@ -215,21 +216,57 @@ class UpbitClient:
         to: datetime | None,
         count: int,
     ) -> list[dict]:
-        self._respect_rate_limit()
         endpoint = self._build_endpoint(timeframe)
         params = {"market": market, "count": count}
         if to is not None:
             params["to"] = to.astimezone(KST).isoformat()
-        response = self.session.get(f"{self.base_url}{endpoint}", params=params, timeout=10)
+
+        last_exc: Exception | None = None
+        for _ in range(self._max_http_retry):
+            self._respect_rate_limit()
+            response = self.session.get(f"{self.base_url}{endpoint}", params=params, timeout=10)
+            if response.status_code == 429:
+                self._update_rate_limit_from_headers(response.headers, fallback=1.0)
+                continue
+            try:
+                response.raise_for_status()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                break
+            self._update_rate_limit_from_headers(response.headers)
+            return response.json()
+        if last_exc:
+            raise last_exc
         response.raise_for_status()
-        return response.json()
 
     def _respect_rate_limit(self) -> None:
         with self._lock:
             elapsed = time.monotonic() - self._last_call
-            if elapsed < self.cooldown:
-                time.sleep(self.cooldown - elapsed)
+            if elapsed < self._next_delay:
+                time.sleep(self._next_delay - elapsed)
             self._last_call = time.monotonic()
+            self._next_delay = 0.0
+
+    def _update_rate_limit_from_headers(self, headers: dict[str, str], fallback: float = 0.0) -> None:
+        remaining = headers.get("Remaining-Req") or ""
+        rate_hint: dict[str, str] = {}
+        for token in remaining.split(";"):
+            if "=" in token:
+                k, v = token.strip().split("=", 1)
+                rate_hint[k] = v
+        try:
+            sec_left = int(rate_hint.get("sec", "0"))
+        except ValueError:
+            sec_left = 0
+        delay = fallback
+        if sec_left <= 1:
+            delay = max(delay, 1.0)
+        elif sec_left <= 5:
+            delay = max(delay, 0.5)
+        elif sec_left <= 10:
+            delay = max(delay, 0.2)
+        with self._lock:
+            self._next_delay = max(self._next_delay, delay)
 
     @staticmethod
     def _build_endpoint(timeframe: TimeframeSpec) -> str:
@@ -274,14 +311,22 @@ class OHLCVIngestService:
         default_targets = [item.strip() for item in default_targets_env.split(",") if item.strip()]
         self.symbol_configs = load_symbol_configs(self.config_path, default_targets)
 
-        self.request_delay = float(os.getenv("OHLCV_REQUEST_DELAY_SECONDS", "0.11"))
-        self.lookback_multiplier = int(os.getenv("OHLCV_LOOKBACK_MULTIPLIER", "5"))
+        self.collect_start = self._parse_collect_start(os.getenv("OHLCV_COLLECT_START"))
         self.max_retry = int(os.getenv("OHLCV_RETRY_LIMIT", "1"))  # 재시도 1회
         self.api_client = UpbitClient(
             base_url=os.getenv("UPBIT_API_BASE_URL", "https://api.upbit.com/v1"),
-            cooldown_seconds=self.request_delay,
         )
         self.collection_delay_seconds = int(os.getenv("OHLCV_COLLECTION_INTERVAL_SECONDS", "300"))
+
+    @staticmethod
+    def _parse_collect_start(raw: str | None) -> datetime:
+        if not raw:
+            raise ConfigurationError("OHLCV_COLLECT_START must be set (e.g., '2024-01-01T00:00:00').")
+        try:
+            dt = datetime.fromisoformat(raw)
+        except Exception as exc:  # noqa: BLE001
+            raise ConfigurationError(f"Invalid OHLCV_COLLECT_START: '{raw}'") from exc
+        return ensure_kst(dt)
 
     def get_config(self, symbol: str) -> SymbolTimeframeConfig:
         for cfg in self.symbol_configs:
@@ -297,12 +342,7 @@ class OHLCVIngestService:
         for cfg in self.symbol_configs:
             base = cfg.base
             end = align_timestamp(request_time, base)
-            last_range = self._latest_range(session, cfg.symbol, base.raw)
-            if last_range:
-                start = ensure_kst(last_range.end_timestamp)
-            else:
-                approx_length = timeframe_sort_key(cfg.max_timeframe) * self.lookback_multiplier
-                start = end - timedelta(minutes=approx_length)
+            start = align_timestamp(self.collect_start, base)
             if start >= end:
                 continue
             logger.debug(
@@ -328,9 +368,21 @@ class OHLCVIngestService:
             if not harvested:
                 continue
             self._persist_candles(session, symbol, base_tf, harvested)
-            self._record_range(session, symbol, base_tf.raw, harvested[0]["timestamp"], harvested[-1]["timestamp"] + base_tf.to_timedelta())
-            self._merge_ranges(session, symbol, base_tf.raw)
-            self._build_aggregations(session, symbol, cfg, harvested[0]["timestamp"], harvested[-1]["timestamp"])
+            range_start = harvested[0]["timestamp"]
+            range_end = harvested[-1]["timestamp"] + base_tf.to_timedelta()
+            if self._is_range_complete(session, symbol, base_tf, range_start, range_end):
+                if not self._range_covered(session, symbol, base_tf.raw, range_start, range_end):
+                    self._record_range(session, symbol, base_tf.raw, range_start, range_end)
+                    self._merge_ranges(session, symbol, base_tf.raw)
+            else:
+                logger.warning(
+                    "Skipping range record for %s %s [%s, %s): missing candles",
+                    symbol,
+                    base_tf.raw,
+                    range_start,
+                    range_end,
+                )
+            self._build_aggregations(session, symbol, cfg, range_start, harvested[-1]["timestamp"])
 
     def dataframe_for_range(
         self,
@@ -563,8 +615,20 @@ class OHLCVIngestService:
                 )
             self._upsert_candles(session, agg_payload)
             if delta:
-                self._record_range(session, symbol, target_tf.raw, resampled.index[0].to_pydatetime(), resampled.index[-1].to_pydatetime() + delta)
-                self._merge_ranges(session, symbol, target_tf.raw)
+                rng_start = resampled.index[0].to_pydatetime()
+                rng_end = resampled.index[-1].to_pydatetime() + delta
+                if self._is_range_complete(session, symbol, target_tf, rng_start, rng_end):
+                    if not self._range_covered(session, symbol, target_tf.raw, rng_start, rng_end):
+                        self._record_range(session, symbol, target_tf.raw, rng_start, rng_end)
+                        self._merge_ranges(session, symbol, target_tf.raw)
+                else:
+                    logger.warning(
+                        "Skipping aggregated range record for %s %s [%s, %s): missing candles",
+                        symbol,
+                        target_tf.raw,
+                        rng_start,
+                        rng_end,
+                    )
             frames[target_tf.raw] = resampled
 
     def _upsert_candles(self, session: Session, payload: list[dict]) -> None:
@@ -642,6 +706,30 @@ class OHLCVIngestService:
         )
         ranges = session.execute(query).scalars().all()
         return [(ensure_kst(rng.start_timestamp), ensure_kst(rng.end_timestamp)) for rng in ranges]
+
+    def _range_covered(self, session: Session, symbol: str, timeframe: str, start: datetime, end: datetime) -> bool:
+        existing = self._fetch_ranges(session, symbol, timeframe)
+        missing = OHLCVRangeCalculator.subtract(existing, (start, end))
+        return len(missing) == 0
+
+    def _is_range_complete(self, session: Session, symbol: str, tf: TimeframeSpec, start: datetime, end: datetime) -> bool:
+        expected = len(list(generate_expected_timestamps(start, end, tf)))
+        if expected == 0:
+            return False
+        query = (
+            select(func.count())
+            .select_from(models.OHLCV)
+            .where(
+                and_(
+                    models.OHLCV.symbol == symbol,
+                    models.OHLCV.timeframe == tf.raw,
+                    models.OHLCV.timestamp >= normalize_timestamp(start),
+                    models.OHLCV.timestamp < normalize_timestamp(end),
+                )
+            )
+        )
+        present = session.execute(query).scalar_one()
+        return present >= expected
 
     def _latest_range(self, session: Session, symbol: str, timeframe: str) -> models.OHLCVRange | None:
         query = (

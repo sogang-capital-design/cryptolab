@@ -57,7 +57,7 @@ class LightGBMStrategy(Strategy):
         sell_threshold = self._get_hyperparams('sell_threshold')
 
         features_df = self._feature_engineering(inference_df).dropna()
-        features_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+        features_df.drop(columns=["open", "high", "low", "close", "volume", "value"], inplace=True, errors="ignore")
         model_input = features_df.iloc[-1].values.reshape(1, -1)
         model_output = float(self.model.predict(model_input)[0])
         model_output = (np.exp(model_output) * 100) - 100
@@ -80,9 +80,9 @@ class LightGBMStrategy(Strategy):
     
     def explain(self, train_df: pd.DataFrame, inference_df: pd.DataFrame) -> dict[str]:
         train_df = self._feature_engineering(train_df).dropna()
-        train_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+        train_df.drop(columns=["open", "high", "low", "close", "volume", "value"], inplace=True, errors="ignore")
         features_df = self._feature_engineering(inference_df).dropna()
-        features_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
+        features_df.drop(columns=["open", "high", "low", "close", "volume", "value"], inplace=True, errors="ignore")
         model_input = features_df.iloc[-1].values.reshape(1, -1)
         explainer = shap.TreeExplainer(
             self.model,
@@ -112,7 +112,7 @@ class LightGBMStrategy(Strategy):
 
         train_fe = self._feature_engineering(train_df).dropna()
         infer_fe = self._feature_engineering(inference_df).dropna()
-        drop_cols = ["open", "high", "low", "close", "volume"]
+        drop_cols = ["open", "high", "low", "close", "volume", "value"]
         train_fe = train_fe.drop(columns=drop_cols, errors="ignore")
         infer_fe = infer_fe.drop(columns=drop_cols, errors="ignore")
 

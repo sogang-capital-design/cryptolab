@@ -19,13 +19,13 @@
 | --- | --- | --- |
 | `JWT_SECRET` | `dev-only-secret-change-me` | JWT 서명을 위한 비밀 키. 운영 환경에서는 반드시 고유 값으로 교체하여야 합니다. |
 | `JWT_EXPIRE_SECONDS` | `7200` | 액세스 토큰 만료 시간(초). |
+| `OPENAI_API_KEY` | `dev-only-secret-change-me` | openAI GPT를 사용한 설명 기능을 위한 비밀 키. 운영 환경에서는 반드시 고유 값으로 교체하여야 합니다. |
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Celery 브로커 URL(기본 Redis). |
 | `CELERY_RESULT_BACKEND` | `redis://localhost:6379/1` | Celery 결과 저장 백엔드 URL. |
 | `OHLCV_CONFIG_PATH` | `config/ohlcv_settings.yml` | OHLCV 수집 심볼/타임프레임 설정 파일 경로. |
 | `DEFAULT_TARGET_TIMEFRAMES` | `60m,240m,1d` | 설정 파일에 target 목록이 없을 때 사용할 기본 타임프레임 집합. |
 | `UPBIT_API_BASE_URL` | `https://api.upbit.com/v1` | Upbit REST API 기본 URL. |
-| `OHLCV_REQUEST_DELAY_SECONDS` | `0.11` | Upbit 호출 사이 최소 지연(초). |
-| `OHLCV_LOOKBACK_MULTIPLIER` | `5` | 최초 수집 시 최대 타임프레임의 몇 배 길이를 당겨올지 결정. |
+| `OHLCV_COLLECT_START` | `2024-01-01T00:00:00` | 최초 수집 시 수집 대상 기간의 최초 일시. 이 시점부터 서버 구동 시점까지를 수집합니다. |
 | `OHLCV_RETRY_LIMIT` | `1` | 누락 구간 재수집 최대 횟수. 실패 시 보간으로 대체. |
 | `OHLCV_COLLECTION_INTERVAL_SECONDS` | `300` | 과거 주기형 스케줄용 값(하위 호환). |
 | `OHLCV_EXECUTION_OFFSET_SECONDS` | `3` | 정각 기준 몇 초 뒤에 수집 태스크를 실행할지 오프셋. |
