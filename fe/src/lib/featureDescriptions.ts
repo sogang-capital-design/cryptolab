@@ -19,6 +19,14 @@ const MODEL_FEATURES: { [key: string]: { name: string; description: string } } =
     "name": "MACD 변화율($1시간)",
     "description": "MACD 값의 $1시간 대비 퍼센트 변화율입니다. 모멘텀의 변화 속도를 보여줍니다."
   },
+  "rsi_pct_change_(\\d+)": {
+    "name": "RSI 변화율($1시간)",
+    "description": "RSI의 $1시간 대비 퍼센트 변화율입니다. RSI가 얼마나 빠르게 상승 또는 하락했는지를 나타냅니다."
+  },
+  "macd_pct_change_(\\d+)": {
+    "name": "MACD 변화율($1시간)",
+    "description": "MACD 값의 $1시간 대비 퍼센트 변화율입니다. 모멘텀의 변화 속도를 보여줍니다."
+  },
 
   // --- 정규식(Regex) 키 - 숫자만 붙는 그룹 ---
   "price_std_(\\d+)": {
@@ -118,32 +126,43 @@ export const getFeatureInfo = (
   featureKey: string,
   type: "model" | "chart"
 ): { name: string; description: string } => {
-  
+
   const featureMap = type === "model" ? MODEL_FEATURES : CHART_FEATURES;
 
-  // 1. 정확히 일치하는 키 찾기 (예: "rsi", "adx")
   if (featureMap[featureKey]) {
     return featureMap[featureKey];
   }
 
-  // 2. 동적 키(정규식) 찾기 (예: "price_pct_change_1h")
+  const applyTemporalReplacement = (template: string, number: string) => {
+    let result = template;
+    if (template.includes("$1시간")) {
+      const replacement = number === "0" ? "현재" : `${number}시간`;
+      result = template.replace("$1시간", replacement);
+    } else if (template.includes("$1번째 이전")) {
+      const replacement = number === "0" ? "현재" : `${number}번째 이전`;
+      result = template.replace("$1번째 이전", replacement);
+    } else {
+      result = template.replace("$1", number);
+    }
+    return result;
+  };
+
   if (type === "model") {
     for (const templateKey in featureMap) {
-      if (templateKey.includes('(') || templateKey.includes('\\')) {
-        const regex = new RegExp(`^${templateKey}$`); 
+      if (templateKey.includes("(") || templateKey.includes("\\")) {
+        const regex = new RegExp(`^${templateKey}$`);
         const match = featureKey.match(regex);
-        
+
         if (match) {
-          const number = match[1]; // "1"
+          const number = match[1];
           return {
-            name: featureMap[templateKey].name.replace("$1", number), // "가격 변화율(1시간)"
-            description: featureMap[templateKey].description.replace("$1", number),
+            name: applyTemporalReplacement(featureMap[templateKey].name, number),
+            description: applyTemporalReplacement(featureMap[templateKey].description, number),
           };
         }
       }
     }
   }
 
-  // 3. 일치하는 것이 없으면 원본 키 반환
   return { name: featureKey, description: "설명 없음" };
 };

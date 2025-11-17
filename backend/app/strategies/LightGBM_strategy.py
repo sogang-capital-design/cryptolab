@@ -83,7 +83,7 @@ class LightGBMStrategy(Strategy):
         train_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
         features_df = self._feature_engineering(inference_df).dropna()
         features_df.drop(columns=["open", "high", "low", "close", "volume"], inplace=True)
-        model_input = features_df.iloc[-1].values.reshape(1, -1)
+        model_input = features_df.iloc[-1:].values
         explainer = shap.TreeExplainer(
             self.model,
             data=train_df,

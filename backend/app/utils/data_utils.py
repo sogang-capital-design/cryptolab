@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import json
 
 from app.strategies.strategy import Strategy
 
@@ -23,6 +24,15 @@ def get_all_data_info() -> list[tuple[str, pd.Timestamp, pd.Timestamp]]:
         end_timestamp = pd.to_datetime(end_time)
         data_info.append((coin_symbol, start_timestamp, end_timestamp))
     return data_info
+
+def get_model_meta_info(coin_symbol: str, timeframe: int) -> dict:
+    MODEL_NAME = "LightGBM"
+    PARAM_NAME = f"{coin_symbol}_{timeframe}m"
+    MODEL_FULL_NAME = f"{MODEL_NAME}+{PARAM_NAME}"
+    data_path = _get_data_path()
+    model_meta_path = os.path.join(data_path, 'meta', 'model_stats.json')
+    meta_info = json.load(open(model_meta_path, 'r'))
+    return meta_info[MODEL_FULL_NAME]
 
 def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     coin_symbol = 'KRW-' + coin_symbol.upper()
