@@ -16,7 +16,8 @@ class ReferenceChartResult(BaseModel):
 	similarity: float
     
 class ExplainModelResult(BaseModel):
-	prediction: float
+	prediction_percentile: float
+	recommendation: str
 	shap_values: Dict[str, float]
 	feature_values: Dict[str, float]
 	reference_charts: List[ReferenceChartResult]

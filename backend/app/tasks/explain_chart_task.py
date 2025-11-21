@@ -16,17 +16,21 @@ def explain_chart_task(self, coin_symbol: str, timeframe: int, inference_time: s
     INFERENCE_WINDOW_SIZE = 100
     inference_timestamp = pd.Timestamp(inference_time).tz_localize(None)
     inference_iloc = total_df.index.get_loc(inference_timestamp)
-    inference_df = total_df.iloc[inference_iloc - INFERENCE_WINDOW_SIZE:inference_iloc]
+    inference_df = total_df.iloc[inference_iloc - INFERENCE_WINDOW_SIZE + 1:inference_iloc + 1]
 
     explanation = {}
     print('Finding similar charts...')
     start_timestamp = pd.Timestamp(start).tz_localize(None)
     end_timestamp = pd.Timestamp(end).tz_localize(None)
     chart_df = total_df.loc[start_timestamp:end_timestamp]
+    # 인퍼런스 시점이 포함된 구간은 유사도 계산 대상에서 제외
+    inference_start = inference_df.index[0]
+    inference_end = inference_df.index[-1]
+    chart_df = chart_df.loc[(chart_df.index < inference_start) | (chart_df.index > inference_end)]
     similar_charts = get_similar_charts(
         chart_df=chart_df,
         inference_df=inference_df,
-        top_k=5
+        top_k=4
     )
     explanation["similar_charts"] = similar_charts
 
@@ -165,6 +169,16 @@ system_prompt = """
   현재 암호화폐 시장이 어떤 상태에 있는지 기술적 관점에서 설명하고,
 - 가격의 추세(상승/하락/횡보), 모멘텀의 강도, 변동성 수준, 거래량의 특징을 종합적으로 묘사하는 것입니다.
 - **출력 형식 예시의 구조를 따르세요.**
+
+- 설명에는 절대 raw feature 이름을 그대로 사용하지 마십시오.  
+(예: "obv_change_window", "price_pct_change_6h", "bb_upper" 등은 금지)
+- 반드시 사람이 **직관적으로 이해할 수 있는 자연어 이름**을 사용하여 표현하십시오.  
+예:  
+- "OBV 변화율"  
+- "최근 6시간 가격 흐름"  
+- "RSI 모멘텀"  
+- "볼린저밴드 상단 근접"  
+
 
 [작성 지침]
 1. 포지션 추천을 하지 마세요.

@@ -15,6 +15,30 @@ import { CandlestickController, CandlestickElement, OhlcController, OhlcElement 
 import { Chart as ReactChartJs } from "react-chartjs-2";
 import "chartjs-adapter-date-fns";
 
+const currentLinePlugin = {
+  id: "currentLine",
+  beforeDraw(chart: Chart) {
+    const ctx = chart.ctx;
+    const pluginOptions = (chart.options?.plugins as any)?.currentLine;
+    const value = pluginOptions?.value;
+    if (value === undefined || value === null) return;
+    if (!chart.chartArea) return;
+    const xScale = chart.scales.x as any;
+    if (!xScale?.getPixelForValue) return;
+    const pixel = xScale.getPixelForValue(value);
+    if (pixel < chart.chartArea.left || pixel > chart.chartArea.right) return;
+    ctx.save();
+    ctx.strokeStyle = pluginOptions?.color || "#38bdf8";
+    ctx.lineWidth = pluginOptions?.lineWidth || 1;
+    ctx.setLineDash(pluginOptions?.dash || [6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pixel, chart.chartArea.top);
+    ctx.lineTo(pixel, chart.chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
 // ★★★ 2. TimeSeriesScale을 제거하고 차트 등록 ★★★
 Chart.register(
   TimeScale,
@@ -25,7 +49,8 @@ Chart.register(
   CandlestickController,
   CandlestickElement,
   OhlcController,
-  OhlcElement
+  OhlcElement,
+  currentLinePlugin
 );
 
 // 업비트 캔들 API 응답 타입
@@ -41,29 +66,44 @@ interface UpbitCandle {
 
 interface ChartProps {
   coinSymbol: string;
-  selectedDate: string;
+  timestamp?: string | null;
+  windowHours?: number;
+  futureHours?: number;
+  height?: string;
+  highlightTimestamp?: string | number | null;
 }
 
-export default function HistoricalCandleChart({ coinSymbol, selectedDate }: ChartProps) {
+export default function HistoricalCandleChart({
+  coinSymbol,
+  timestamp,
+  windowHours = 24,
+  futureHours = 0,
+  height,
+  highlightTimestamp,
+}: ChartProps) {
   const [candles, setCandles] = useState<UpbitCandle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!coinSymbol || !selectedDate) return;
+    if (!coinSymbol || !timestamp) return;
 
     const fetchCandles = async () => {
       setLoading(true);
       setError(null);
       setCandles([]); 
 
-      const toDateTime = new Date(selectedDate + "T00:00:00+09:00"); // KST
+      const toDateTime = new Date(timestamp as string);
+      toDateTime.setMinutes(0, 0, 0);
+      if (futureHours > 0) {
+        toDateTime.setHours(toDateTime.getHours() + futureHours);
+      }
       const toParam = toDateTime.toISOString(); // UTC
       const market = `KRW-${coinSymbol}`;
 
       try {
         const response = await fetch(
-          `https://api.upbit.com/v1/candles/minutes/60?market=${market}&to=${toParam}&count=24`
+          `https://api.upbit.com/v1/candles/minutes/60?market=${market}&to=${toParam}&count=${windowHours + futureHours}`
         );
         if (!response.ok) {
           throw new Error("업비트 캔들 데이터를 불러오는데 실패했습니다.");
@@ -78,13 +118,13 @@ export default function HistoricalCandleChart({ coinSymbol, selectedDate }: Char
     };
 
     fetchCandles();
-  }, [coinSymbol, selectedDate]);
+  }, [coinSymbol, timestamp, windowHours]);
 
   // --- 차트 데이터 포맷팅 ---
   const chartData = {
     datasets: [
       {
-        label: `${coinSymbol} 60분봉`,
+        label: `${coinSymbol} ${windowHours}시간봉`,
         data: candles.map((candle) => ({
           x: new Date(candle.candle_date_time_kst).getTime(),
           o: candle.opening_price,
@@ -102,6 +142,7 @@ export default function HistoricalCandleChart({ coinSymbol, selectedDate }: Char
   };
 
   // --- 차트 옵션 ---
+  const highlightMs = highlightTimestamp ? new Date(highlightTimestamp).getTime() : undefined;
   const chartOptions: any = {
     responsive: true,
     maintainAspectRatio: false, 
@@ -132,22 +173,49 @@ export default function HistoricalCandleChart({ coinSymbol, selectedDate }: Char
         mode: 'index',
         intersect: false,
       },
+      currentLine: {
+        value: highlightMs,
+        color: "#38bdf8",
+        lineWidth: 1,
+        dash: [4, 4],
+      },
     },
   };
 
   // --- 렌더링 ---
-  if (loading) {
-    return <div className="p-4 text-gray-500 text-center h-60 flex items-center justify-center">차트 데이터 로딩 중...</div>;
-  }
-  if (error) {
-    return <div className="p-4 text-red-400 text-center h-60 flex items-center justify-center">{error}</div>;
-  }
-  if (candles.length === 0) {
-    return <div className="p-4 text-gray-500 text-center h-60 flex items-center justify-center">차트 데이터가 없습니다.</div>;
+  if (!timestamp) {
+    return (
+      <div className="p-4 text-gray-500 text-center h-60 flex items-center justify-center">
+        표시할 시점을 선택해 주세요.
+      </div>
+    );
   }
 
+  if (loading) {
+    return (
+      <div className="p-4 text-gray-500 text-center h-60 flex items-center justify-center">
+        차트 데이터 로딩 중...
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="p-4 text-red-400 text-center h-60 flex items-center justify-center">
+        {error}
+      </div>
+    );
+  }
+  if (candles.length === 0) {
+    return (
+      <div className="p-4 text-gray-500 text-center h-60 flex items-center justify-center">
+        차트 데이터가 없습니다.
+      </div>
+    );
+  }
+
+  const containerHeight = height ?? "300px";
   return (
-    <div className="p-4" style={{ height: "300px" }}> 
+    <div className="p-4" style={{ height: containerHeight }}>
       <ReactChartJs type="candlestick" data={chartData} options={chartOptions} />
     </div>
   );

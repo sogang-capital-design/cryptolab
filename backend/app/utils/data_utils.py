@@ -2,12 +2,14 @@ import os
 from typing import TYPE_CHECKING, List, Tuple
 
 import pandas as pd
+import json
 from sqlalchemy import func, select
 
 if TYPE_CHECKING:
     from app.services.ohlcv_service import OHLCVIngestService
 
 _ingest_service: "OHLCVIngestService | None" = None
+
 
 
 def _get_data_path() -> str:
@@ -62,6 +64,14 @@ def get_all_data_info() -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
         data_info.append((coin_symbol, pd.Timestamp(start), pd.Timestamp(end)))
     return data_info
 
+def get_model_meta_info(coin_symbol: str, timeframe: int) -> dict:
+    MODEL_NAME = "LightGBM"
+    PARAM_NAME = f"{coin_symbol}_{timeframe}m"
+    MODEL_FULL_NAME = f"{MODEL_NAME}+{PARAM_NAME}"
+    data_path = _get_data_path()
+    model_meta_path = os.path.join(data_path, 'meta', 'model_stats.json')
+    meta_info = json.load(open(model_meta_path, 'r'))
+    return meta_info[MODEL_FULL_NAME]
 
 def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     symbol = "KRW-" + coin_symbol.upper()

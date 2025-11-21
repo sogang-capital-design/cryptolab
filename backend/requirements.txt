@@ -1299,6 +1299,7 @@ scipy==1.16.3 \
     --hash=sha256:fb4b29f4cf8cc5a8d628bc8d8e26d12d7278cd1f219f22698a378c3d67db5e4b \
     --hash=sha256:ffa6eea95283b2b8079b821dc11f50a17d0571c92b43e2b5b12764dc5f9b285d
     # via
+    #   cryptolab-backend
     #   lightgbm
     #   scikit-learn
     #   shap
