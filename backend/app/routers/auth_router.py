@@ -33,7 +33,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=LoginResponse)
 def login(req: LoginRequest, db: Session = Depends(get_db)):
-    user = authenticate_user(db, email=req.email, name=req.name, password=req.password)
+    user = authenticate_user(db, email=req.email, password=req.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = issue_access_token(user)
