@@ -14,7 +14,6 @@ class RegisterResponse(BaseModel):
 
 class LoginRequest(BaseModel):
     email: str
-    name: str
     password: str
 
 class LoginResponse(BaseModel):
