@@ -25,7 +25,7 @@ def register_user(db: Session, email: str, name: str, password: str) -> models.U
     return user
 
 
-def authenticate_user(db: Session, email: str, name: str, password: str) -> Optional[models.User]:
+def authenticate_user(db: Session, email: str, password: str) -> Optional[models.User]:
     user = (
         db.query(models.User)
         .filter(models.User.email == email)
