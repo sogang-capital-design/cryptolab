@@ -2,9 +2,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
-// 모든 API 요청에 자동으로 토큰을 넣어줄 fetch 래퍼 함수 (권장)
+// 모든 API 요청에 자동으로 토큰을 넣어줄 fetch 래퍼 함수 (로그인 선택적)
 export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = localStorage.getItem("access_token");
 
@@ -15,63 +15,95 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
 
   const response = await fetch(url, { ...options, headers });
 
-  if (response.status === 401) { // 401 Unauthorized
-    // 토큰이 만료되었거나 유효하지 않음
+  if (response.status === 401) {
+    // 토큰이 만료되었거나 유효하지 않음 (로그인 페이지로 강제 이동하지 않음)
     localStorage.removeItem("access_token");
-    // window.location.href = '/login'; // 페이지 강제 이동
-    throw new Error("Unauthorized");
   }
-  
+
   return response;
 }
 
-
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const router = useRouter();
+  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const checkAuth = async () => {
       const token = localStorage.getItem("access_token");
 
       if (!token) {
-        router.replace("/login"); // 토큰 없으면 로그인 페이지로
+        setIsLoading(false);
         return;
       }
 
       try {
-        // 2. 토큰이 유효한지 /auth/me API로 확인
         const response = await fetchWithAuth("http://localhost:8000/auth/me");
-        
+
         if (response.ok) {
-          setIsLoggedIn(true); // 유효한 토큰, 로그인 상태 인정
-        } else {
-          throw new Error("Invalid token");
+          const data = await response.json();
+          setUser(data);
         }
       } catch (error) {
-        console.error("인증 실패:", error);
-        localStorage.removeItem("access_token");
-        router.replace("/login"); // 유효하지 않으면 로그인 페이지로
+        console.error("인증 확인 실패:", error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
     checkAuth();
-  }, [router]);
+  }, []);
 
-  // 1. 인증 확인 중...
-  if (!isLoggedIn) {
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    setUser(null);
+    window.location.href = "/";
+  };
+
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
-        로그인 정보 확인 중...
+        로딩 중...
       </div>
     );
   }
 
-  // 2. 인증 성공!
   return (
     <div className="min-h-screen bg-gray-900 text-white">
-      {/* TODO: 여기에 공통 헤더나 사이드바를 추가할 수 있습니다. */}
-      {/* <header>...</header> */}
+      <header className="bg-gray-800 border-b border-gray-700">
+        <div className="container mx-auto px-8 py-4 flex items-center justify-between">
+          <Link href="/" className="text-2xl font-bold text-blue-400 hover:text-blue-300">
+            Crypto Lab
+          </Link>
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                <span className="text-gray-300">환영합니다, {user.username}님</span>
+                <button
+                  onClick={handleLogout}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-white font-semibold"
+                >
+                  로그아웃
+                </button>
+              </>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold"
+                >
+                  로그인
+                </Link>
+                <Link
+                  href="/register"
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg text-white font-semibold"
+                >
+                  회원가입
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </header>
       <main>{children}</main>
     </div>
   );

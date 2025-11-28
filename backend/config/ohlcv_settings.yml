@@ -1,9 +1,21 @@
 pairs:
-  - symbol: "KRW-BTC"
+  - symbol: "KRW-ETH"
     base_timeframe: "60m"
     target_timeframes:
       - "60m"
-  - symbol: "KRW-ETH"
+  - symbol: "KRW-PEPE"
+    base_timeframe: "60m"
+    target_timeframes:
+      - "60m"
+  - symbol: "KRW-LINK"
+    base_timeframe: "60m"
+    target_timeframes:
+      - "60m"
+  - symbol: "KRW-UNI"
+    base_timeframe: "60m"
+    target_timeframes:
+      - "60m"
+  - symbol: "KRW-SHIB"
     base_timeframe: "60m"
     target_timeframes:
       - "60m"

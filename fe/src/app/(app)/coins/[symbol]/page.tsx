@@ -2,27 +2,61 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { fetchWithAuth } from "../../layout";
 // 1. '설명 없음' 문제를 해결한 헬퍼 함수 임포트
-import { getFeatureInfo } from "@/lib/featureDescriptions"; 
+import { getFeatureInfo } from "@/lib/featureDescriptions";
 // 2. 업비트 과거 캔들 차트 컴포넌트 임포트
 import HistoricalCandleChart from "@/components/HistoricalCandleChart";
 
+// --- 추가 타입 정의 ---
+interface CoinListResponse {
+  available_coin_symbols: string[];
+}
+
+interface WatchlistResponse {
+  coin_symbols: string[];
+}
+
 // --- 타입 정의 ---
+interface FeatureValue {
+  value: number;
+  display_name?: string;
+  interpretation?: string;
+}
+
 interface ExplainModelResult {
   prediction_percentile: number;
   recommendation: "Buy" | "Weak buy" | "Hold" | "Weak sell" | "Sell";
-  shap_values: { [feature: string]: number };
-  feature_values: { [feature: string]: number };
+  shap_values: { [feature: string]: FeatureValue };
+  feature_values: { [feature: string]: FeatureValue };
   reference_charts: { timestamp: string; similarity: number }[];
   explanation_text: string;
 }
 
 interface ExplainChartResult {
-  similar_charts: { timestamp: string; distance: number }[];
-  feature_values: { [feature: string]: number };
+  feature_values: { [feature: string]: FeatureValue };
+  explanation_text: string;
+}
+
+interface DifferenceStats {
+  up_value: number;
+  down_value: number;
+  diff: number;
+  pct_diff: number;
+  display_name?: string;
+  interpretation?: string;
+}
+
+interface SimilarChartStats {
+  price_up_count: number;
+  price_down_count: number;
+  feature_stats: { [feature: string]: DifferenceStats };
+}
+
+interface ExplainSimilarChartResult {
+  top_similar_charts: { timestamp: string; distance: number }[];
+  similar_chart_stats: SimilarChartStats;
   explanation_text: string;
 }
 
@@ -137,11 +171,25 @@ interface CoinInfoResponse {
 }
 
 const formatDateTimeLocal = (date: Date) => {
+  if (!date || isNaN(date.getTime())) {
+    // 유효하지 않은 날짜인 경우 현재 시간 사용
+    date = new Date();
+  }
   const tzOffsetMs = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - tzOffsetMs).toISOString().slice(0, 16);
 };
 
-const isoToLocalDateTime = (iso: string) => formatDateTimeLocal(new Date(iso));
+const isoToLocalDateTime = (iso: string) => {
+  // 백엔드에서 타임존 없이 날짜를 보내는 경우 (예: "2024-01-01 00:00:00")
+  // 이를 로컬 시간으로 처리
+  if (!iso) return formatDateTimeLocal(new Date());
+
+  // "2024-01-01 00:00:00" 형식을 "2024-01-01T00:00:00"로 변환
+  const normalized = iso.replace(' ', 'T').split('.')[0]; // 밀리초 제거
+
+  // datetime-local input에 맞는 형식으로 변환 (YYYY-MM-DDTHH:mm)
+  return normalized.slice(0, 16);
+};
 
 const toHourPrecision = (timestamp: string) => {
   if (!timestamp.includes("T")) {
@@ -203,28 +251,30 @@ const getModelPercentileColor = (percentile: number) => {
 
 
 // --- 헬퍼 컴포넌트: SHAP 차트 (툴팁 적용) ---
-function ShapChart({ shapValues }: { shapValues: { [key: string]: number } }) {
-  const sortedShap = Object.entries(shapValues).sort(([, a], [, b]) => Math.abs(b) - Math.abs(a));
-  const maxVal = Math.max(...sortedShap.map(entry => Math.abs(entry[1])), 1e-9);
+function ShapChart({ shapValues }: { shapValues: { [key: string]: FeatureValue } }) {
+  const sortedShap = Object.entries(shapValues).sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value));
+  const maxVal = Math.max(...sortedShap.map(entry => Math.abs(entry[1].value)), 1e-9);
 
   return (
     <div className="space-y-2">
       <h3 className="text-xl font-semibold mb-3">AI 추천 핵심 근거 (SHAP)</h3>
-      {sortedShap.map(([featureKey, value]) => {
-        // getFeatureInfo 함수로 한글 이름/설명 가져오기
-        const { name, description } = getFeatureInfo(featureKey, "model");
+      {sortedShap.map(([featureKey, valueObj]) => {
+        const value = valueObj.value;
+        // Use backend-provided descriptions with fallback
+        const displayName = valueObj.display_name || getFeatureInfo(featureKey, "model").name;
+        const interpretation = valueObj.interpretation || getFeatureInfo(featureKey, "model").description;
         const isPositive = value > 0;
         const widthPercent = (Math.abs(value) / maxVal) * 100;
-        
+
         return (
           <div key={featureKey} className="w-full">
             <div className="flex justify-between text-xs text-gray-300 mb-1">
               {/* title 속성으로 툴팁 추가 */}
-              <span 
-                className="cursor-help" 
-                title={description} // 마우스를 올리면 설명이 툴팁으로 뜸
+              <span
+                className="cursor-help"
+                title={interpretation} // 마우스를 올리면 설명이 툴팁으로 뜸
               >
-                {name} {/* 한글 이름 표시 */}
+                {displayName} {/* 한글 이름 표시 */}
               </span>
               <span className={isPositive ? "text-green-400" : "text-red-400"}>
                 {value.toFixed(6)}
@@ -246,7 +296,13 @@ function ShapChart({ shapValues }: { shapValues: { [key: string]: number } }) {
 // --- 메인 컴포넌트 ---
 export default function CoinDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const coinSymbol = Array.isArray(params.symbol) ? params.symbol[0] : params.symbol;
+
+  // 0. 코인 목록 및 관심 코인 상태
+  const [availableCoins, setAvailableCoins] = useState<string[]>([]);
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [showCoinSelector, setShowCoinSelector] = useState(false);
 
   // 1. 데이터 상태
   const [coinInfo, setCoinInfo] = useState<CoinInfoResponse | null>(null);
@@ -263,6 +319,7 @@ export default function CoinDetailPage() {
   const [chartTask, setChartTask] = useState<ApiTaskResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
+  const chartPollingRef = useRef<NodeJS.Timeout | null>(null);
   const [activeTab, setActiveTab] = useState<"model" | "chart">("model");
   const [scoreTask, setScoreTask] = useState<ScoreChartApiTaskResponse | null>(null);
   const [scoreLoading, setScoreLoading] = useState(false);
@@ -273,11 +330,74 @@ export default function CoinDetailPage() {
     "indicators" | "similar" | "scores"
   >("indicators");
 
+  // 4. '유사 차트 분석' 상태
+  const [similarTask, setSimilarTask] = useState<ApiTaskResponse | null>(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similarError, setSimilarError] = useState<string | null>(null);
+  const similarPollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- 코인 목록 및 관심 코인 로드 ---
+  useEffect(() => {
+    const fetchCoinsAndWatchlist = async () => {
+      try {
+        // 코인 목록 가져오기
+        const coinsRes = await fetch("http://localhost:8000/data/list");
+        if (coinsRes.ok) {
+          const data: CoinListResponse = await coinsRes.json();
+          setAvailableCoins(data.available_coin_symbols);
+        }
+
+        // 관심 코인 가져오기 (로그인 상태일 때만)
+        const token = localStorage.getItem("access_token");
+        if (token) {
+          const watchlistRes = await fetchWithAuth("http://localhost:8000/watchlist");
+          if (watchlistRes.ok) {
+            const data: WatchlistResponse = await watchlistRes.json();
+            setWatchlist(data.coin_symbols);
+          }
+        }
+      } catch (error) {
+        console.error("코인 목록 또는 관심 코인 로드 실패:", error);
+      }
+    };
+
+    fetchCoinsAndWatchlist();
+  }, []);
+
+  // --- 관심 코인 토글 ---
+  const handleToggleWatchlist = async (coin: string) => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      alert("로그인이 필요합니다.");
+      return;
+    }
+
+    try {
+      const isInWatchlist = watchlist.includes(coin);
+      const method = isInWatchlist ? "DELETE" : "POST";
+      const res = await fetchWithAuth("http://localhost:8000/watchlist", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ coin_symbol: coin }),
+      });
+
+      if (res.ok) {
+        if (isInWatchlist) {
+          setWatchlist(watchlist.filter((c) => c !== coin));
+        } else {
+          setWatchlist([...watchlist, coin]);
+        }
+      }
+    } catch (error) {
+      console.error("관심 코인 토글 실패:", error);
+    }
+  };
+
   // --- 데이터 Fetch (코인 분석 가능 기간) ---
   useEffect(() => {
     // coinSymbol이 유효할 때만 API 호출
-    if (!coinSymbol) return; 
-    
+    if (!coinSymbol) return;
+
     const fetchCoinInfo = async () => {
       try {
         const res = await fetch("http://localhost:8000/data/info", {
@@ -286,6 +406,7 @@ export default function CoinDetailPage() {
           body: JSON.stringify({ coin_symbol: coinSymbol }),
         });
         const data: CoinInfoResponse = await res.json();
+        console.log("[coinInfo] 받은 데이터:", data);
         setCoinInfo(data);
         const now = new Date();
         const maxDate = new Date(data.available_end);
@@ -428,6 +549,143 @@ export default function CoinDetailPage() {
     };
   }, [scoreTask?.task_id, scoreTask?.status]);
 
+  // --- 차트 폴링 ---
+  useEffect(() => {
+    if (!chartTask?.task_id) {
+      return;
+    }
+
+    const isPending =
+      chartTask.status === "PENDING" || chartTask.status === "STARTED";
+
+    if (!isPending) {
+      setChartLoading(false);
+      if (chartPollingRef.current) {
+        clearInterval(chartPollingRef.current);
+        chartPollingRef.current = null;
+      }
+      return;
+    }
+
+    const taskId = chartTask.task_id;
+
+    const pollChartStatus = async () => {
+      try {
+        const response = await fetchWithAuth(
+          `http://localhost:8000/explain/chart/${taskId}`
+        );
+        const data = (await response.json()) as ApiTaskResponse;
+        if (!response.ok) {
+          throw new Error("차트 분석 상태 조회에 실패했습니다.");
+        }
+        console.log("[chart] Polling response:", data);
+        setChartTask(data);
+        if (data.status === "FAILURE") {
+          setChartError("차트 분석에 실패했습니다.");
+        }
+        if (data.status === "SUCCESS") {
+          setChartError(null);
+          console.log("[chart] Results:", data.results);
+        }
+        if (data.status !== "PENDING" && data.status !== "STARTED") {
+          setChartLoading(false);
+        }
+      } catch (err: any) {
+        if (chartPollingRef.current) {
+          clearInterval(chartPollingRef.current);
+          chartPollingRef.current = null;
+        }
+        setChartLoading(false);
+        setChartError(err.message);
+        console.error("[chart] 폴링 중 에러:", err);
+      }
+    };
+
+    pollChartStatus();
+    chartPollingRef.current = setInterval(pollChartStatus, 3000);
+
+    return () => {
+      if (chartPollingRef.current) {
+        clearInterval(chartPollingRef.current);
+        chartPollingRef.current = null;
+      }
+    };
+  }, [chartTask?.task_id, chartTask?.status]);
+
+  // --- 유사 차트 폴링 ---
+  useEffect(() => {
+    if (!similarTask?.task_id) {
+      return;
+    }
+
+    const isPending =
+      similarTask.status === "PENDING" || similarTask.status === "STARTED";
+
+    if (!isPending) {
+      setSimilarLoading(false);
+      if (similarPollingRef.current) {
+        clearInterval(similarPollingRef.current);
+        similarPollingRef.current = null;
+      }
+      return;
+    }
+
+    const taskId = similarTask.task_id;
+
+    const pollSimilarStatus = async () => {
+      try {
+        const response = await fetchWithAuth(
+          `http://localhost:8000/explain/similar_chart/${taskId}`
+        );
+        const data = (await response.json()) as ApiTaskResponse;
+        if (!response.ok) {
+          throw new Error("유사 차트 상태 조회에 실패했습니다.");
+        }
+        setSimilarTask(data);
+        if (data.status === "FAILURE") {
+          setSimilarError("유사 차트 분석에 실패했습니다.");
+        }
+        if (data.status === "SUCCESS") {
+          setSimilarError(null);
+        }
+        if (data.status !== "PENDING" && data.status !== "STARTED") {
+          setSimilarLoading(false);
+        }
+      } catch (err: any) {
+        if (similarPollingRef.current) {
+          clearInterval(similarPollingRef.current);
+          similarPollingRef.current = null;
+        }
+        setSimilarLoading(false);
+        setSimilarError(err.message);
+        console.error("[similar] 폴링 중 에러:", err);
+      }
+    };
+
+    pollSimilarStatus();
+    similarPollingRef.current = setInterval(pollSimilarStatus, 3000);
+
+    return () => {
+      if (similarPollingRef.current) {
+        clearInterval(similarPollingRef.current);
+        similarPollingRef.current = null;
+      }
+    };
+  }, [similarTask?.task_id, similarTask?.status]);
+
+  // --- 분석 시점 변경 시 자동으로 모든 분석 실행 ---
+  useEffect(() => {
+    if (!selectedTimestamp || !coinSymbol || !coinInfo) {
+      return;
+    }
+
+    // 4가지 분석을 모두 동시에 실행
+    handleModelExplain();
+    handleChartExplain();
+    handleSimilarChart();
+    handleScoreChart();
+  }, [selectedTimestamp]);
+
   // --- 핸들러 1: AI 모델 분석 (KeyError 해결 + Polling 시작 수정) ---
   const handleModelExplain = async () => {
     if (!coinSymbol) return; // coinSymbol이 없으면 실행 중지
@@ -481,7 +739,7 @@ export default function CoinDetailPage() {
 
   // --- 핸들러 2: 차트 기술적 분석 (Polling 시작 수정) ---
   const handleChartExplain = async () => {
-    if (!coinInfo || !coinSymbol) return; // coinInfo나 coinSymbol이 없으면 실행 중지
+    if (!coinSymbol) return; // coinSymbol이 없으면 실행 중지
     setChartLoading(true);
     setChartError(null);
     setChartTask(null);
@@ -503,8 +761,6 @@ export default function CoinDetailPage() {
           coin_symbol: coinSymbol,
           timeframe: 60,
           inference_time: inferenceTime,
-          start: coinInfo.available_start, 
-          end: coinInfo.available_end,
         }),
       });
 
@@ -584,21 +840,158 @@ export default function CoinDetailPage() {
       setScoreError(err.message);
     }
   };
+
+  const handleSimilarChart = async () => {
+    if (!coinSymbol || !coinInfo) return;
+
+    setSimilarLoading(true);
+    setSimilarError(null);
+    if (similarPollingRef.current) {
+      clearInterval(similarPollingRef.current);
+      similarPollingRef.current = null;
+    }
+    setSimilarTask(null);
+
+    if (!selectedTimestamp) {
+      setSimilarError("시점을 선택한 후 요청해 주세요.");
+      setSimilarLoading(false);
+      return;
+    }
+
+    const normalizedTimestamp = toHourPrecision(selectedTimestamp);
+    const inferenceTime = formatKstNaiveString(normalizedTimestamp);
+
+    console.log("[similar] 분석 요청 시간 (KST 기준):", inferenceTime);
+
+    try {
+      const response = await fetchWithAuth("http://localhost:8000/explain/similar_chart/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          coin_symbol: coinSymbol,
+          timeframe: 60,
+          inference_time: inferenceTime,
+          search_start: coinInfo.available_start,
+          search_end: coinInfo.available_end,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("[similar] API 요청 실패:", data.detail || "알 수 없는 서버 에러");
+        throw new Error(data.detail || "유사 차트 요청 실패");
+      }
+
+      setSimilarTask({
+        task_id: data.task_id,
+        status: "PENDING",
+        results: null,
+      });
+      console.log("[similar] Task ID 수신 성공, 폴링 시작:", data.task_id);
+    } catch (err: any) {
+      console.error("[similar] handleSimilarChart CATCH 블록 에러:", err.message);
+      setSimilarLoading(false);
+      setSimilarError(err.message);
+    }
+  };
   
   const modelResults = modelTask?.results as ExplainModelResult | null;
   const chartResults = chartTask?.results as ExplainChartResult | null;
+  const similarResults = similarTask?.results as ExplainSimilarChartResult | null;
 
   // --- 렌더링 영역 ---
   return (
     <div className="container mx-auto p-8">
       <header className="mb-8">
-        <Link href="/coins" className="text-blue-400 hover:text-blue-500">
-          &larr; 코인 목록으로 돌아가기
-        </Link>
-        <h1 className="text-4xl font-bold text-center text-white mt-4">
-          <span className="mr-4">🪙</span>
-          {coinSymbol} AI 분석
-        </h1>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-4">
+            <h1 className="text-4xl font-bold text-white">
+              {coinSymbol} AI 분석
+            </h1>
+            <button
+              onClick={() => setShowCoinSelector(!showCoinSelector)}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-semibold"
+            >
+              코인 변경
+            </button>
+          </div>
+          {coinSymbol && (
+            <button
+              onClick={() => handleToggleWatchlist(coinSymbol)}
+              className={`px-4 py-2 rounded-lg font-semibold ${
+                watchlist.includes(coinSymbol)
+                  ? "bg-yellow-600 hover:bg-yellow-700 text-white"
+                  : "bg-gray-700 hover:bg-gray-600 text-white"
+              }`}
+            >
+              {watchlist.includes(coinSymbol) ? "★ 관심 코인" : "☆ 관심 코인 추가"}
+            </button>
+          )}
+        </div>
+
+        {/* 코인 선택기 */}
+        {showCoinSelector && (
+          <div className="mb-6 p-4 bg-gray-800 rounded-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">코인 선택</h2>
+              <button
+                onClick={() => setShowCoinSelector(false)}
+                className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+              >
+                닫기
+              </button>
+            </div>
+
+            {/* 관심 코인 */}
+            {watchlist.length > 0 && (
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-gray-400 mb-2">관심 코인</h3>
+                <div className="flex flex-wrap gap-2">
+                  {watchlist.map((coin) => (
+                    <button
+                      key={coin}
+                      onClick={() => {
+                        router.push(`/coins/${coin}`);
+                        setShowCoinSelector(false);
+                      }}
+                      className={`px-4 py-2 rounded-lg font-semibold transition ${
+                        coin === coinSymbol
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-700 hover:bg-gray-600 text-white"
+                      }`}
+                    >
+                      ★ {coin}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 모든 코인 */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-400 mb-2">모든 코인</h3>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 max-h-64 overflow-y-auto">
+                {availableCoins.map((coin) => (
+                  <button
+                    key={coin}
+                    onClick={() => {
+                      router.push(`/coins/${coin}`);
+                      setShowCoinSelector(false);
+                    }}
+                    className={`px-3 py-2 rounded-lg font-semibold transition ${
+                      coin === coinSymbol
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-700 hover:bg-gray-600 text-white"
+                    }`}
+                  >
+                    {coin}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* --- 1. 차트 및 날짜 선택 (TypeScript 에러 수정) --- */}
@@ -616,8 +1009,8 @@ export default function CoinDetailPage() {
               className="p-2 bg-gray-700 text-white rounded-lg border border-gray-600"
             />
             <p className="text-sm text-gray-400">
-              (분석 가능 기간: {new Date(coinInfo.available_start).toLocaleDateString()} ~ 
-              {new Date(coinInfo.available_end).toLocaleDateString()})
+              (분석 가능 기간: {coinInfo.available_start?.split(' ')[0] || coinInfo.available_start} ~
+              {coinInfo.available_end?.split(' ')[0] || coinInfo.available_end})
             </p>
           </div>
         ) : (
@@ -724,22 +1117,24 @@ export default function CoinDetailPage() {
                     <h3 className="text-xl font-semibold mb-2">Feature / SHAP 값</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
                       {Object.entries(modelResults.shap_values)
-                        .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
-                        .map(([featureKey, shapValue]) => {
-                          const featureValue = modelResults.feature_values[featureKey];
-                          const { name, description } = getFeatureInfo(featureKey, "model");
+                        .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
+                        .map(([featureKey, shapValueObj]) => {
+                          const featureValueObj = modelResults.feature_values[featureKey];
+                          // Use backend-provided descriptions with fallback
+                          const displayName = shapValueObj.display_name || getFeatureInfo(featureKey, "model").name;
+                          const interpretation = shapValueObj.interpretation || getFeatureInfo(featureKey, "model").description;
                           return (
                             <div
                               key={featureKey}
                               className="border border-gray-600 rounded-lg p-2 bg-gray-900"
-                              title={description}
+                              title={interpretation}
                             >
                               <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                <span>{name}</span>
-                                <span>SHAP {shapValue.toFixed(4)}</span>
+                                <span>{displayName}</span>
+                                <span>SHAP {shapValueObj.value.toFixed(4)}</span>
                               </div>
                               <p className="text-base text-white">
-                                {Number.isFinite(featureValue) ? featureValue.toFixed(4) : "-"}
+                                {Number.isFinite(featureValueObj?.value) ? featureValueObj.value.toFixed(4) : "-"}
                               </p>
                             </div>
                           );
@@ -756,11 +1151,10 @@ export default function CoinDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={handleChartExplain}
-                    disabled={chartLoading || !coinInfo}
+                    disabled={chartLoading}
                     className={`px-4 py-2 font-bold text-white rounded-lg ${
                       (chartLoading ||
-                        (chartTask?.status === "STARTED" || chartTask?.status === "PENDING") ||
-                        !coinInfo)
+                        (chartTask?.status === "STARTED" || chartTask?.status === "PENDING"))
                         ? "bg-gray-600 cursor-not-allowed"
                         : "bg-blue-600 hover:bg-blue-700"
                     }`}
@@ -769,6 +1163,22 @@ export default function CoinDetailPage() {
                       (chartTask?.status === "STARTED" || chartTask?.status === "PENDING"))
                       ? "차트 기술적 분석 진행 중..."
                       : "차트 기술적 분석"}
+                  </button>
+                  <button
+                    onClick={handleSimilarChart}
+                    disabled={similarLoading || !coinInfo}
+                    className={`px-4 py-2 font-bold text-white rounded-lg ${
+                      (similarLoading ||
+                        (similarTask?.status === "STARTED" || similarTask?.status === "PENDING") ||
+                        !coinInfo)
+                        ? "bg-gray-600 cursor-not-allowed"
+                        : "bg-purple-600 hover:bg-purple-700"
+                    }`}
+                  >
+                    {(similarLoading ||
+                      (similarTask?.status === "STARTED" || similarTask?.status === "PENDING"))
+                      ? "유사 차트 분석 중..."
+                      : "유사 차트 찾기"}
                   </button>
                   <button
                     onClick={handleScoreChart}
@@ -829,25 +1239,27 @@ export default function CoinDetailPage() {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {Object.entries(chartResults.feature_values)
-                        .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
-                        .map(([featureKey, value]) => {
-                          const { name, description } = getFeatureInfo(featureKey, "chart");
+                        .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
+                        .map(([featureKey, featureValue]) => {
+                          // Use backend-provided descriptions if available, otherwise fall back to client-side lookup
+                          const displayName = featureValue.display_name || getFeatureInfo(featureKey, "chart").name;
+                          const interpretation = featureValue.interpretation || getFeatureInfo(featureKey, "chart").description;
                           return (
                             <div
                               key={featureKey}
                               className="border border-gray-600 rounded-2xl bg-gray-900 p-3 space-y-1"
                             >
                               <div className="flex items-center justify-between text-sm text-gray-400">
-                                <span>{name}</span>
+                                <span>{displayName}</span>
                                 <span className="text-xs uppercase tracking-wide">값</span>
                               </div>
                               <p
                                 className="text-xl font-semibold text-white"
-                                title={description}
+                                title={interpretation}
                               >
-                                {value.toFixed(2)}
+                                {featureValue.value.toFixed(2)}
                               </p>
-                              <p className="text-xs text-gray-400">{description}</p>
+                              <p className="text-xs text-gray-400">{interpretation}</p>
                             </div>
                           );
                         })}
@@ -936,58 +1348,131 @@ export default function CoinDetailPage() {
             </div>
           )}
         </div>
-        {activeTab === "chart" && chartSection === "similar" && chartTask?.status === "SUCCESS" && chartResults && selectedTimestamp && coinSymbol && (
+        {activeTab === "chart" && chartSection === "similar" && (
           <div className="mt-6 space-y-6">
-            <div className="p-4 bg-gray-700 rounded-lg space-y-4">
-              <h3 className="text-xl font-semibold">가장 유사한 과거 시점</h3>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="flex justify-center">
-                  <div className="border border-blue-600 rounded-xl overflow-hidden bg-gray-900 w-full sm:w-1/2">
-                    <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-400">
-                      <span>현재 시점 ({new Date(selectedTimestamp).toLocaleString()})</span>
-                      <span className="text-blue-300">#현재 차트</span>
-                    </div>
-                      <div className="px-3 pb-3">
-                        <HistoricalCandleChart
-                          coinSymbol={coinSymbol}
-                          timestamp={selectedTimestamp}
-                          height="170px"
-                          windowHours={24}
-                          futureHours={0}
-                          highlightTimestamp={selectedTimestamp}
-                        />
-                      </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {chartResults.similar_charts.map((chart, index) => (
-                    !chart.timestamp || !coinSymbol ? null : (
-                      <div
-                        key={`${chart.timestamp}-${index}`}
-                        className="border border-gray-600 rounded-xl overflow-hidden bg-gray-900"
-                      >
+            {similarError && <p className="text-red-400 text-center">{similarError}</p>}
+            {(similarLoading ||
+              (similarTask?.status === "STARTED" || similarTask?.status === "PENDING")) && (
+              <p className="text-gray-500 text-center">유사 차트를 찾는 중입니다...</p>
+            )}
+            {similarTask?.status === "SUCCESS" && similarResults && selectedTimestamp && coinSymbol && (
+              <div className="space-y-6">
+                {/* 1. 먼저 차트들을 보여줌 */}
+                <div className="p-4 bg-gray-700 rounded-lg space-y-4">
+                  <h3 className="text-xl font-semibold">가장 유사한 과거 시점</h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="flex justify-center">
+                      <div className="border border-blue-600 rounded-xl overflow-hidden bg-gray-900 w-full sm:w-1/2">
                         <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-400">
-                          <span>
-                            {index + 1}. {new Date(chart.timestamp).toLocaleString()}
-                          </span>
-                          <span>거리 {chart.distance.toFixed(3)}</span>
+                          <span>현재 시점 ({new Date(selectedTimestamp).toLocaleString()})</span>
+                          <span className="text-blue-300">#현재 차트</span>
                         </div>
                         <div className="px-3 pb-3">
                           <HistoricalCandleChart
                             coinSymbol={coinSymbol}
-                            timestamp={chart.timestamp}
+                            timestamp={selectedTimestamp}
                             height="170px"
-                            windowHours={24}
-                            futureHours={6}
-                            highlightTimestamp={chart.timestamp}
+                            windowHours={12}
+                            futureHours={0}
+                            highlightTimestamp={selectedTimestamp}
                           />
                         </div>
                       </div>
-                    )
-                  ))}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {similarResults.top_similar_charts.map((chart, index) => (
+                        !chart.timestamp || !coinSymbol ? null : (
+                          <div
+                            key={`${chart.timestamp}-${index}`}
+                            className="border border-gray-600 rounded-xl overflow-hidden bg-gray-900"
+                          >
+                            <div className="flex items-center justify-between px-4 py-2 text-xs text-gray-400">
+                              <span>
+                                {index + 1}. {new Date(chart.timestamp).toLocaleString()}
+                              </span>
+                              <span>거리 {chart.distance.toFixed(3)}</span>
+                            </div>
+                            <div className="px-3 pb-3">
+                              <HistoricalCandleChart
+                                coinSymbol={coinSymbol}
+                                timestamp={chart.timestamp}
+                                height="170px"
+                                windowHours={12}
+                                futureHours={3}
+                                highlightTimestamp={chart.timestamp}
+                              />
+                            </div>
+                          </div>
+                        )
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. 그 아래에 자연어 설명 */}
+                <div className="p-4 bg-gray-700 rounded-lg">
+                  <h3 className="text-xl font-semibold mb-2">유사 패턴 분석</h3>
+                  <p className="text-gray-300 whitespace-pre-line">
+                    {renderBoldText(similarResults.explanation_text)}
+                  </p>
+                </div>
+
+                {/* 3. 마지막으로 지표 차이 */}
+                <div className="p-4 bg-gray-700 rounded-lg space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-semibold">주요 지표 차이 (상승 vs 하락)</h3>
+                    <div className="text-xs text-gray-400">
+                      <span className="text-sky-300">▲ 상승 {similarResults.similar_chart_stats.price_up_count}개</span>
+                      {" / "}
+                      <span className="text-rose-300">▼ 하락 {similarResults.similar_chart_stats.price_down_count}개</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {Object.entries(similarResults.similar_chart_stats.feature_stats)
+                      .sort(([, a], [, b]) => Math.abs(b.pct_diff) - Math.abs(a.pct_diff))
+                      .map(([featureKey, stats]) => {
+                        const displayName = stats.display_name || getFeatureInfo(featureKey, "chart").name;
+                        const interpretation = stats.interpretation || getFeatureInfo(featureKey, "chart").description;
+                        const isUpHigher = stats.up_value > stats.down_value;
+                        return (
+                          <div
+                            key={featureKey}
+                            className="border border-gray-600 rounded-lg bg-gray-900 p-3"
+                            title={interpretation}
+                          >
+                            <div className="text-sm font-semibold text-gray-300 mb-2">
+                              {displayName}
+                            </div>
+                            <div className="space-y-1 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-sky-300">상승 시</span>
+                                <span className="text-white">{stats.up_value.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-rose-300">하락 시</span>
+                                <span className="text-white">{stats.down_value.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-gray-700">
+                                <span className="text-gray-400">차이율</span>
+                                <span className={`font-semibold ${
+                                  isUpHigher ? "text-sky-300" : "text-rose-300"
+                                }`}>
+                                  {(stats.pct_diff * 100).toFixed(1)}%
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
+            {!similarResults && !similarLoading && !similarError && (
+              <p className="text-center text-gray-400">
+                유사 차트를 찾기 위해 버튼을 눌러주세요.
+              </p>
+            )}
           </div>
         )}
       </section>

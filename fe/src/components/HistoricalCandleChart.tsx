@@ -17,7 +17,7 @@ import "chartjs-adapter-date-fns";
 
 const currentLinePlugin = {
   id: "currentLine",
-  beforeDraw(chart: Chart) {
+  afterDraw(chart: Chart) {
     const ctx = chart.ctx;
     const pluginOptions = (chart.options?.plugins as any)?.currentLine;
     const value = pluginOptions?.value;
