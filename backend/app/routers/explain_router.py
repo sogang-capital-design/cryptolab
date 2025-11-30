@@ -17,6 +17,7 @@ router = APIRouter()
 @router.post("/model/", response_model=ExplainModelResponse)
 async def explain(req: ExplainModelRequest) -> ExplainModelResponse:
     task = explain_model_task.delay(
+        model_name=req.model_name,
         coin_symbol=req.coin_symbol,
         timeframe=req.timeframe,
         inference_time=req.inference_time

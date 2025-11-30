@@ -8,9 +8,9 @@ from app.utils.model_load_utils import get_strategy_class, get_param_path
 from app.utils.data_utils import get_ohlcv_df, get_model_meta_info, get_onchain_df, get_prompt, get_feature_texts
 
 @celery_app.task(bind=True)
-def explain_model_task(self, coin_symbol: str, timeframe: int, inference_time: str) -> dict:
-    print(f'coin_symbol: {coin_symbol}')
-    MODEL_NAME = "LightGBM"
+def explain_model_task(self, model_name:str, coin_symbol: str, timeframe: int, inference_time: str) -> dict:
+    print(f'[explain_task] model={model_name}, symbol={coin_symbol}, tf={timeframe}')
+    MODEL_NAME = model_name
     PARAM_NAME = f"{coin_symbol}_{timeframe}m"
     TRAIN_START = "2024-01-01 00:00:00"
     TRAIN_END = "2025-01-01 00:00:00"
@@ -101,6 +101,7 @@ def explain_model_task(self, coin_symbol: str, timeframe: int, inference_time: s
     explanation["feature_values"] = feature_values_with_metadata
 
     meta_info = get_model_meta_info(
+        model_name=MODEL_NAME,
         coin_symbol=coin_symbol,
         timeframe=timeframe,
     )

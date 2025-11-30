@@ -10,6 +10,7 @@ class FeatureValue(BaseModel):
 
 # Explain Model Schema
 class ExplainModelRequest(BaseModel):
+	model_name: str
 	coin_symbol: str
 	timeframe: int
 	inference_time: datetime

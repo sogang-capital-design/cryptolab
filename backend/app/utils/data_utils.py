@@ -66,11 +66,18 @@ def get_all_data_info() -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
         data_info.append((coin_symbol, pd.Timestamp(start), pd.Timestamp(end)))
     return data_info
 
-def get_model_meta_info(coin_symbol: str, timeframe: int) -> dict:
+def get_model_meta_info(model_name: str, coin_symbol: str, timeframe: int) -> dict:
     data_path = _get_data_path()
     model_meta_path = os.path.join(data_path, 'meta', 'model_stats.json')
-    meta_info = json.load(open(model_meta_path, 'r'))
-    return meta_info[coin_symbol]
+    
+    with open(model_meta_path, "r") as f:
+        meta_info = json.load(f)
+
+    key = f"{coin_symbol}"
+    try:
+        return meta_info[model_name][key]
+    except KeyError:
+        raise KeyError(f"Meta info not found for model={model_name}, key={key}")
 
 def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     symbol = "KRW-" + coin_symbol.upper()
