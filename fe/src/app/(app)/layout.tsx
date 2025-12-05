@@ -24,7 +24,7 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [user, setUser] = useState<{ name: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -77,7 +77,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-4">
             {user ? (
               <>
-                <span className="text-gray-300">환영합니다, {user.username}님</span>
+                <span className="text-gray-300">환영합니다, {user.name}님</span>
                 <button
                   onClick={handleLogout}
                   className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-white font-semibold"

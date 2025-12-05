@@ -4,6 +4,9 @@ from typing import List
 class WatchlistCreateRequest(BaseModel):
     coin_symbols: List[str] = Field(..., min_items=5, max_items=5)
 
+class WatchlistToggleRequest(BaseModel):
+    coin_symbol: str
+
 class WatchlistResponse(BaseModel):
     coin_symbols: List[str]
 

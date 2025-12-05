@@ -393,22 +393,27 @@ export default function CoinDetailPage() {
 
     try {
       const isInWatchlist = watchlist.includes(coin);
+      const endpoint = isInWatchlist
+        ? "http://localhost:8000/watchlist/remove"
+        : "http://localhost:8000/watchlist/add";
       const method = isInWatchlist ? "DELETE" : "POST";
-      const res = await fetchWithAuth("http://localhost:8000/watchlist", {
+
+      const res = await fetchWithAuth(endpoint, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ coin_symbol: coin }),
       });
 
       if (res.ok) {
-        if (isInWatchlist) {
-          setWatchlist(watchlist.filter((c) => c !== coin));
-        } else {
-          setWatchlist([...watchlist, coin]);
-        }
+        const data: WatchlistResponse = await res.json();
+        setWatchlist(data.coin_symbols);
+      } else {
+        const errorData = await res.json();
+        alert(`관심 코인 ${isInWatchlist ? "제거" : "추가"} 실패: ${errorData.detail || "알 수 없는 오류"}`);
       }
     } catch (error) {
       console.error("관심 코인 토글 실패:", error);
+      alert("관심 코인 처리 중 오류가 발생했습니다.");
     }
   };
 
