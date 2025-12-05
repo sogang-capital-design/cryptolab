@@ -4,28 +4,32 @@ import openai
 from dtaidistance import dtw
 
 from app.celery_app import celery_app
-from app.utils.data_utils import get_feature_texts, get_ohlcv_df, get_onchain_df, get_prompt
+from app.utils.data_utils import get_feature_texts, get_total_df, get_total_df_online, get_prompt
+from app.utils.cache_utils import cache_task_result
 
 @celery_app.task(bind=True)
+@cache_task_result(prefix="explain_similar_chart")
 def explain_similar_chart_task(self, coin_symbol: str, timeframe: int, inference_time: str, search_start: str, search_end: str) -> dict:
-    ohlcv_df = get_ohlcv_df(
-        coin_symbol=coin_symbol,
-        timeframe=timeframe
-    )
-    onchain_df = get_onchain_df(
-        coin_symbol=coin_symbol,
-        timeframe=timeframe
-    )
-    total_df = pd.merge(ohlcv_df, onchain_df, left_index=True, right_index=True, how='inner')
+    total_df = get_total_df(coin_symbol)
+
     WINDOW_SIZE = 12
-    inference_timestamp = pd.Timestamp(inference_time).tz_localize(None)
-    inference_iloc = total_df.index.get_loc(inference_timestamp)
-    inference_df = total_df.iloc[inference_iloc - WINDOW_SIZE + 1:inference_iloc + 1]
+    INFERENCE_WINDOW_SIZE = 100
+    inference_ts = pd.Timestamp(inference_time)
+    if inference_ts.tz is None:
+        inference_ts = inference_ts.tz_localize("UTC")
+    start_time = inference_ts - pd.Timedelta(hours=INFERENCE_WINDOW_SIZE)
+    end_time = inference_ts
+    inference_df = get_total_df_online(coin_symbol, start_time, end_time)
+    inference_df = inference_df.iloc[-WINDOW_SIZE:]
 
     explanation = {}
     print('Finding similar charts...')
-    start_timestamp = pd.Timestamp(search_start).tz_localize(None)
-    end_timestamp = pd.Timestamp(search_end).tz_localize(None)
+    start_timestamp = pd.Timestamp(search_start)
+    if start_timestamp.tz is None:
+        start_timestamp = start_timestamp.tz_localize("UTC")
+    end_timestamp = pd.Timestamp(search_end)
+    if end_timestamp.tz is None:
+        end_timestamp = end_timestamp.tz_localize("UTC")
     chart_df = total_df.loc[start_timestamp:end_timestamp]
     # 인퍼런스 시점이 포함된 구간은 유사도 계산 대상에서 제외
     inference_start = inference_df.index[0]
@@ -71,7 +75,7 @@ def explain_similar_chart_task(self, coin_symbol: str, timeframe: int, inference
         key_feature_stats = dict(sorted_key_features[:6])
 
     # feature 설명 추가
-    chart_feature_texts = get_feature_texts('chart')
+    chart_feature_texts = get_feature_texts('LightGBM_model')
     for feature_name in key_feature_stats:
         if feature_name in chart_feature_texts:
             feature_info = chart_feature_texts[feature_name]
@@ -154,13 +158,13 @@ def get_similar_chart_stats(similar_charts: list[dict], chart_df: pd.DataFrame, 
             continue
 
         price_change_3h = chart_df['close'].loc[future_timestamp] / chart_df['close'].loc[timestamp] - 1.0
-        # median을 사용하여 이상치에 강건하게 처리
-        median_features = chart_df.loc[timestamp - pd.Timedelta(hours=window_size):timestamp - pd.Timedelta(hours=1)].median()
+        # mean을 사용하여 계산
+        mean_features = chart_df.loc[timestamp - pd.Timedelta(hours=window_size):timestamp - pd.Timedelta(hours=1)].mean()
 
         if price_change_3h > 0:
-            price_up_features_list.append(median_features)
+            price_up_features_list.append(mean_features)
         else:
-            price_down_features_list.append(median_features)
+            price_down_features_list.append(mean_features)
 
     price_up_count = len(price_up_features_list)
     price_down_count = len(price_down_features_list)
@@ -173,17 +177,17 @@ def get_similar_chart_stats(similar_charts: list[dict], chart_df: pd.DataFrame, 
             "feature_stats": {}
         }
 
-    # DataFrame으로 변환 후 median 계산 (이중 robust 처리)
+    # DataFrame으로 변환 후 mean 계산
     price_up_df = pd.DataFrame(price_up_features_list)
     price_down_df = pd.DataFrame(price_down_features_list)
 
-    price_up_feature_medians = price_up_df.median().to_dict()
-    price_down_feature_medians = price_down_df.median().to_dict()
+    price_up_feature_means = price_up_df.mean().to_dict()
+    price_down_feature_means = price_down_df.mean().to_dict()
 
     feature_stats = {}
-    for k in price_up_feature_medians.keys():
-        up_val = price_up_feature_medians[k]
-        down_val = price_down_feature_medians[k]
+    for k in price_up_feature_means.keys():
+        up_val = price_up_feature_means[k]
+        down_val = price_down_feature_means[k]
 
         # NaN이나 inf 체크
         if np.isnan(up_val) or np.isnan(down_val) or np.isinf(up_val) or np.isinf(down_val):
@@ -228,7 +232,7 @@ def get_similar_chart_explanation_text(similar_chart_stats: dict) -> str:
     user_prompt += stat_dict_to_text(similar_chart_stats)
 
     # feature 해석 가이드 추가
-    chart_feature_description_dict = get_feature_texts('chart')
+    chart_feature_description_dict = get_feature_texts('LightGBM_model')
     filtered_chart_feature_description_dict = {k: v for k, v in chart_feature_description_dict.items() if k in similar_chart_stats}
     user_prompt += "\n=== 각 지표의 의미 ===\n"
     user_prompt += feature_dict_to_text(filtered_chart_feature_description_dict)
@@ -273,12 +277,12 @@ def extract_key_features(explanation_text: str, feature_stats: dict, max_feature
 
     client = openai.OpenAI()
     response = client.chat.completions.create(
-        model='gpt-4o-mini',
+        model='gpt-5.1-chat-latest',
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
     )
 
     import json

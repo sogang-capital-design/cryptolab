@@ -53,15 +53,16 @@ Chart.register(
   currentLinePlugin
 );
 
-// 업비트 캔들 API 응답 타입
-interface UpbitCandle {
-  market: string;
-  candle_date_time_kst: string;
-  opening_price: number;
-  high_price: number;
-  low_price: number;
-  trade_price: number;
-  candle_acc_trade_volume: number;
+import { fetchOHLCV, OHLCVDataPoint } from "@/lib/api";
+
+// 캔들 데이터 타입 (백엔드 API 응답 기반)
+interface CandleData {
+  datetime: Date;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 interface ChartProps {
@@ -81,7 +82,7 @@ export default function HistoricalCandleChart({
   height,
   highlightTimestamp,
 }: ChartProps) {
-  const [candles, setCandles] = useState<UpbitCandle[]>([]);
+  const [candles, setCandles] = useState<CandleData[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,34 +92,46 @@ export default function HistoricalCandleChart({
     const fetchCandles = async () => {
       setLoading(true);
       setError(null);
-      setCandles([]); 
+      setCandles([]);
 
-      const toDateTime = new Date(timestamp as string);
-      toDateTime.setMinutes(0, 0, 0);
+      // timestamp는 마지막 캔들의 종료 시점
+      // 예: timestamp=10:00이면 9:00~10:00 캔들이 마지막 봉
+      const endDateTime = new Date(timestamp as string);
+      endDateTime.setMinutes(0, 0, 0);
       if (futureHours > 0) {
-        toDateTime.setHours(toDateTime.getHours() + futureHours);
+        endDateTime.setHours(endDateTime.getHours() + futureHours);
       }
-      const toParam = toDateTime.toISOString(); // UTC
-      const market = `KRW-${coinSymbol}`;
+
+      const startDateTime = new Date(endDateTime);
+      startDateTime.setHours(startDateTime.getHours() - (windowHours + futureHours));
 
       try {
-        const response = await fetch(
-          `https://api.upbit.com/v1/candles/minutes/60?market=${market}&to=${toParam}&count=${windowHours + futureHours}`
-        );
-        if (!response.ok) {
-          throw new Error("업비트 캔들 데이터를 불러오는데 실패했습니다.");
-        }
-        const data: UpbitCandle[] = await response.json();
-        setCandles(data.reverse()); 
+        const response = await fetchOHLCV({
+          coin_symbol: coinSymbol,
+          start_time: startDateTime.toISOString(),
+          end_time: endDateTime.toISOString(),
+          interval: "1h",
+        });
+
+        const candleData: CandleData[] = response.data.map((point: OHLCVDataPoint) => ({
+          datetime: new Date(point.datetime_utc),
+          open: point.open,
+          high: point.high,
+          low: point.low,
+          close: point.close,
+          volume: point.volume,
+        }));
+
+        setCandles(candleData);
       } catch (err: any) {
-        setError(err.message);
+        setError(err.message || "OHLCV 데이터를 불러오는데 실패했습니다.");
       } finally {
         setLoading(false);
       }
     };
 
     fetchCandles();
-  }, [coinSymbol, timestamp, windowHours]);
+  }, [coinSymbol, timestamp, windowHours, futureHours]);
 
   // --- 차트 데이터 포맷팅 ---
   const chartData = {
@@ -126,11 +139,11 @@ export default function HistoricalCandleChart({
       {
         label: `${coinSymbol} ${windowHours}시간봉`,
         data: candles.map((candle) => ({
-          x: new Date(candle.candle_date_time_kst).getTime(),
-          o: candle.opening_price,
-          h: candle.high_price,
-          l: candle.low_price,
-          c: candle.trade_price,
+          x: candle.datetime.getTime(),
+          o: candle.open,
+          h: candle.high,
+          l: candle.low,
+          c: candle.close,
         })),
         color: {
           up: '#16c784', // 상승 (초록)

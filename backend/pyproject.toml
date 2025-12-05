@@ -8,7 +8,9 @@ dependencies = [
     "backtrader>=1.9.78.123",
     "celery>=5.5.3",
     "dtaidistance>=2.3.13",
+    "dune-client>=1.10.0",
     "fastapi[all]>=0.120.1",
+    "filelock>=3.20.0",
     "lightgbm>=4.6.0",
     "loguru>=0.7.3",
     "numpy>=2.3.4",
@@ -28,3 +30,11 @@ dependencies = [
     "tqdm>=4.67.1",
     "uvicorn>=0.38.0",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

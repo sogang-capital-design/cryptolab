@@ -250,7 +250,9 @@ class TransformerStrategy(Strategy):
                 "message": "Model is not trained or normalization stats are missing.",
             }
 
-        fe_df = self._feature_engineering(inference_df).dropna()
+        fe_df = self._feature_engineering(inference_df)
+        # inference 시에는 마지막 행을 유지하기 위해 feature columns에 대해서만 dropna
+        fe_df = fe_df.dropna(subset=self.feature_cols)
         if len(fe_df) < self.seq_len + 1:
             return {
                 "prediction": None,
@@ -291,10 +293,10 @@ class TransformerStrategy(Strategy):
         self.model.zero_grad(set_to_none=True)
         pred_scalar.backward()
 
-        grads = x_leaf.grad.detach().cpu().numpy()  
-        X_last_norm_np = X_last_norm              
+        grads = x_leaf.grad.detach().cpu().numpy()
+        X_last_norm_np = X_last_norm
 
-        contrib = np.mean(np.abs(grads * X_last_norm_np), axis=0) 
+        contrib = np.mean(grads * X_last_norm_np, axis=0) 
 
         pred_scaled_val = float(pred_scalar.item())
         g_hat = pred_scaled_val * ret_std20_last      
@@ -316,12 +318,12 @@ class TransformerStrategy(Strategy):
         return explanation
 
     
-    def get_reference_train_data(self, train_df: pd.DataFrame, inference_df: pd.DataFrame,top_k: int = 5,): 
+    def get_reference_train_data(self, train_df: pd.DataFrame, inference_df: pd.DataFrame,top_k: int = 5,):
         if self.model is None or self.feat_mean is None or self.feat_std is None:
             return []
 
         train_fe = self._feature_engineering(train_df).dropna()
-        infer_fe = self._feature_engineering(inference_df).dropna()
+        infer_fe = self._feature_engineering(inference_df).dropna(subset=self.feature_cols)
         if len(train_fe) == 0 or len(infer_fe) == 0:
             return []
 

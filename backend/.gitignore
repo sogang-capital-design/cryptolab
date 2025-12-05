@@ -6,3 +6,6 @@ dump.rdb
 .pytest_cache/
 data/db/user.db
 celerybeat-schedule
+cache/
+*.cache
+data/dune_query/*

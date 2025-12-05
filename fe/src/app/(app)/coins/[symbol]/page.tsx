@@ -62,6 +62,7 @@ interface ExplainSimilarChartResult {
 
 interface ScoreWithExplanation {
   score: number;
+  percentile: number;
   explanation: string;
 }
 type ScoreMetricKey =
@@ -179,18 +180,6 @@ const formatDateTimeLocal = (date: Date) => {
   return new Date(date.getTime() - tzOffsetMs).toISOString().slice(0, 16);
 };
 
-const isoToLocalDateTime = (iso: string) => {
-  // 백엔드에서 타임존 없이 날짜를 보내는 경우 (예: "2024-01-01 00:00:00")
-  // 이를 로컬 시간으로 처리
-  if (!iso) return formatDateTimeLocal(new Date());
-
-  // "2024-01-01 00:00:00" 형식을 "2024-01-01T00:00:00"로 변환
-  const normalized = iso.replace(' ', 'T').split('.')[0]; // 밀리초 제거
-
-  // datetime-local input에 맞는 형식으로 변환 (YYYY-MM-DDTHH:mm)
-  return normalized.slice(0, 16);
-};
-
 const toHourPrecision = (timestamp: string) => {
   if (!timestamp.includes("T")) {
     return timestamp;
@@ -200,11 +189,26 @@ const toHourPrecision = (timestamp: string) => {
   return `${date}T${hour}:00`;
 };
 
-const formatKstNaiveString = (timestamp: string) => {
-  if (!timestamp.includes("T")) {
-    return timestamp;
+const convertKstToUtc = (kstTimestamp: string) => {
+  // KST (UTC+9)를 UTC로 변환
+  // kstTimestamp 형식: "2024-01-01T12:00"
+  if (!kstTimestamp.includes("T")) {
+    return kstTimestamp;
   }
-  return `${timestamp.replace("T", " ")}:00`;
+
+  // datetime-local 값을 KST로 해석하고 UTC로 변환
+  const date = new Date(kstTimestamp);
+  // 9시간을 빼서 UTC로 변환
+  const utcDate = new Date(date.getTime() - 9 * 60 * 60 * 1000);
+
+  // "YYYY-MM-DD HH:mm:ss" 형식으로 반환
+  const year = utcDate.getFullYear();
+  const month = String(utcDate.getMonth() + 1).padStart(2, '0');
+  const day = String(utcDate.getDate()).padStart(2, '0');
+  const hour = String(utcDate.getHours()).padStart(2, '0');
+  const minute = String(utcDate.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hour}:${minute}:00`;
 };
 
 const recommendationLabelMap: Record<ExplainModelResult["recommendation"], string> = {
@@ -299,6 +303,10 @@ export default function CoinDetailPage() {
   const router = useRouter();
   const coinSymbol = Array.isArray(params.symbol) ? params.symbol[0] : params.symbol;
 
+  // Transformer 모델을 지원하는 코인 목록
+  const TRANSFORMER_SUPPORTED_COINS = ["ETH", "LINK", "PEPE", "SHIB", "UNI"];
+  const supportsTransformer = coinSymbol ? TRANSFORMER_SUPPORTED_COINS.includes(coinSymbol) : false;
+
   // 0. 코인 목록 및 관심 코인 상태
   const [availableCoins, setAvailableCoins] = useState<string[]>([]);
   const [watchlist, setWatchlist] = useState<string[]>([]);
@@ -310,17 +318,21 @@ export default function CoinDetailPage() {
     toHourPrecision(formatDateTimeLocal(new Date()))
   );
 
-  // 2. '모델 분석' 상태
+  // 2. '모델 분석' 상태 (LightGBM)
   const [modelTask, setModelTask] = useState<ApiTaskResponse | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+
+  // 2-1. 'Transformer 모델 분석' 상태
+  const [transformerTask, setTransformerTask] = useState<ApiTaskResponse | null>(null);
+  const [transformerLoading, setTransformerLoading] = useState(false);
+  const [transformerError, setTransformerError] = useState<string | null>(null);
 
   // 3. '차트 분석' 상태
   const [chartTask, setChartTask] = useState<ApiTaskResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
-  const chartPollingRef = useRef<NodeJS.Timeout | null>(null);
-  const [activeTab, setActiveTab] = useState<"model" | "chart">("model");
+  const [activeTab, setActiveTab] = useState<"lightgbm" | "transformer" | "chart">("lightgbm");
   const [scoreTask, setScoreTask] = useState<ScoreChartApiTaskResponse | null>(null);
   const [scoreLoading, setScoreLoading] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
@@ -335,6 +347,13 @@ export default function CoinDetailPage() {
   const [similarLoading, setSimilarLoading] = useState(false);
   const [similarError, setSimilarError] = useState<string | null>(null);
   const similarPollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- Transformer를 지원하지 않는 코인으로 이동 시 탭을 lightgbm으로 변경 ---
+  useEffect(() => {
+    if (!supportsTransformer && activeTab === "transformer") {
+      setActiveTab("lightgbm");
+    }
+  }, [supportsTransformer, activeTab]);
 
   // --- 코인 목록 및 관심 코인 로드 ---
   useEffect(() => {
@@ -408,22 +427,18 @@ export default function CoinDetailPage() {
         const data: CoinInfoResponse = await res.json();
         console.log("[coinInfo] 받은 데이터:", data);
         setCoinInfo(data);
+
+        // 기본값을 현재 시점으로 설정 (inference는 현재 시점까지 가능)
         const now = new Date();
-        const maxDate = new Date(data.available_end);
-        const maxLocal = toHourPrecision(isoToLocalDateTime(data.available_end));
+        const defaultLocal = toHourPrecision(formatDateTimeLocal(now));
+
         setSelectedTimestamp((prev) => {
-          if (now > maxDate) {
-            return maxLocal;
+          // 이미 선택된 timestamp가 있으면 유지
+          if (prev) {
+            return toHourPrecision(prev);
           }
-          if (!prev) {
-            return maxLocal;
-          }
-          const prevHour = toHourPrecision(prev);
-          const prevDate = new Date(prevHour);
-          if (prevDate > maxDate) {
-            return maxLocal;
-          }
-          return prevHour;
+          // 처음 로드 시 현재 시점으로 설정
+          return defaultLocal;
         });
       } catch (e) {
         console.error("코인 정보 로드 실패", e);
@@ -432,62 +447,117 @@ export default function CoinDetailPage() {
     fetchCoinInfo();
   }, [coinSymbol]); // coinSymbol이 확정되면 실행
 
-  // --- 공용 폴링(Polling) Hook (디버깅 로그 포함) ---
+  // --- 모델 분석 폴링 ---
   useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null; 
+    if (!modelTask?.task_id) {
+      return;
+    }
 
-    const startPolling = (
-      taskId: string,
-      type: "model" | "chart",
-      setTask: (task: ApiTaskResponse | null) => void,
-      setLoading: (loading: boolean) => void,
-      setError: (error: string | null) => void
-    ) => {
-      
-      console.log(`[${type}] 폴링 시작... Task ID: ${taskId}`); 
+    const isPending =
+      modelTask.status === "PENDING" || modelTask.status === "STARTED";
 
-      intervalId = setInterval(async () => {
-        try {
-          console.log(`[${type}] 작업 상태 확인 중... (ID: ${taskId})`);
-          
-          const res = await fetchWithAuth(
-            `http://localhost:8000/explain/${type}/${taskId}`
-          );
-          if (!res.ok) throw new Error("분석 결과를 가져오는데 실패했습니다.");
+    if (!isPending) {
+      setModelLoading(false);
+      return;
+    }
 
-          const data: ApiTaskResponse = await res.json();
-          setTask(data); 
+    const taskId = modelTask.task_id;
+    console.log(`[model] 폴링 시작... Task ID: ${taskId}`);
 
-          console.log(`[${type}] 현재 상태:`, data.status);
+    const pollModelStatus = async () => {
+      try {
+        console.log(`[model] 작업 상태 확인 중... (ID: ${taskId})`);
 
-          if (data.status === "SUCCESS" || data.status === "FAILURE") {
-            if (intervalId) clearInterval(intervalId);
-            setLoading(false);
-            console.log(`[${type}] 폴링 종료.`);
-            if (data.status === "FAILURE") {
-              setError("AI 분석에 실패했습니다. (백엔드 에러)");
-            }
-          }
-        } catch (err: any) {
-          if (intervalId) clearInterval(intervalId);
-          setLoading(false);
-          setError(err.message);
-          console.error(`[${type}] 폴링 중 에러:`, err);
+        const res = await fetchWithAuth(
+          `http://localhost:8000/explain/model/${taskId}`
+        );
+        const data = (await res.json()) as ApiTaskResponse;
+        if (!res.ok) {
+          throw new Error("모델 분석 상태 조회에 실패했습니다.");
         }
-      }, 3000); 
+
+        console.log(`[model] 현재 상태:`, data.status);
+        setModelTask(data);
+
+        if (data.status === "FAILURE") {
+          setModelError("AI 분석에 실패했습니다. (백엔드 에러)");
+        }
+        if (data.status === "SUCCESS") {
+          setModelError(null);
+        }
+        if (data.status !== "PENDING" && data.status !== "STARTED") {
+          setModelLoading(false);
+        }
+      } catch (err: any) {
+        setModelLoading(false);
+        setModelError(err.message);
+        console.error("[model] 폴링 중 에러:", err);
+      }
     };
 
-    if (modelTask?.task_id && (modelTask.status === "STARTED" || modelTask.status === "PENDING")) {
-      startPolling(modelTask.task_id, "model", setModelTask, setModelLoading, setModelError);
-    }
-    if (chartTask?.task_id && (chartTask.status === "STARTED" || chartTask.status === "PENDING")) {
-      startPolling(chartTask.task_id, "chart", setChartTask, setChartLoading, setChartError);
-    }
-    
+    pollModelStatus();
+    const intervalId = setInterval(pollModelStatus, 3000);
+
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      clearInterval(intervalId);
     };
-  }, [modelTask, chartTask]); 
+  }, [modelTask?.task_id, modelTask?.status]);
+
+  // --- Transformer 모델 분석 폴링 ---
+  useEffect(() => {
+    if (!transformerTask?.task_id) {
+      return;
+    }
+
+    const isPending =
+      transformerTask.status === "PENDING" || transformerTask.status === "STARTED";
+
+    if (!isPending) {
+      setTransformerLoading(false);
+      return;
+    }
+
+    const taskId = transformerTask.task_id;
+    console.log(`[transformer] 폴링 시작... Task ID: ${taskId}`);
+
+    const pollTransformerStatus = async () => {
+      try {
+        console.log(`[transformer] 작업 상태 확인 중... (ID: ${taskId})`);
+
+        const res = await fetchWithAuth(
+          `http://localhost:8000/explain/model/${taskId}`
+        );
+        const data = (await res.json()) as ApiTaskResponse;
+        if (!res.ok) {
+          throw new Error("Transformer 모델 분석 상태 조회에 실패했습니다.");
+        }
+
+        console.log(`[transformer] 현재 상태:`, data.status);
+        setTransformerTask(data);
+
+        if (data.status === "FAILURE") {
+          setTransformerError("Transformer AI 분석에 실패했습니다. (백엔드 에러)");
+        }
+        if (data.status === "SUCCESS") {
+          setTransformerError(null);
+        }
+        if (data.status !== "PENDING" && data.status !== "STARTED") {
+          setTransformerLoading(false);
+        }
+      } catch (err: any) {
+        setTransformerLoading(false);
+        setTransformerError(err.message);
+        console.error("[transformer] 폴링 중 에러:", err);
+      }
+    };
+
+    pollTransformerStatus();
+    const intervalId = setInterval(pollTransformerStatus, 3000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [transformerTask?.task_id, transformerTask?.status]);
 
   useEffect(() => {
     if (!scoreTask?.task_id) {
@@ -560,17 +630,16 @@ export default function CoinDetailPage() {
 
     if (!isPending) {
       setChartLoading(false);
-      if (chartPollingRef.current) {
-        clearInterval(chartPollingRef.current);
-        chartPollingRef.current = null;
-      }
       return;
     }
 
     const taskId = chartTask.task_id;
+    console.log(`[chart] 폴링 시작... Task ID: ${taskId}`);
 
     const pollChartStatus = async () => {
       try {
+        console.log(`[chart] 작업 상태 확인 중... (ID: ${taskId})`);
+
         const response = await fetchWithAuth(
           `http://localhost:8000/explain/chart/${taskId}`
         );
@@ -578,8 +647,10 @@ export default function CoinDetailPage() {
         if (!response.ok) {
           throw new Error("차트 분석 상태 조회에 실패했습니다.");
         }
-        console.log("[chart] Polling response:", data);
+
+        console.log(`[chart] 현재 상태:`, data.status);
         setChartTask(data);
+
         if (data.status === "FAILURE") {
           setChartError("차트 분석에 실패했습니다.");
         }
@@ -591,10 +662,6 @@ export default function CoinDetailPage() {
           setChartLoading(false);
         }
       } catch (err: any) {
-        if (chartPollingRef.current) {
-          clearInterval(chartPollingRef.current);
-          chartPollingRef.current = null;
-        }
         setChartLoading(false);
         setChartError(err.message);
         console.error("[chart] 폴링 중 에러:", err);
@@ -602,13 +669,10 @@ export default function CoinDetailPage() {
     };
 
     pollChartStatus();
-    chartPollingRef.current = setInterval(pollChartStatus, 3000);
+    const intervalId = setInterval(pollChartStatus, 3000);
 
     return () => {
-      if (chartPollingRef.current) {
-        clearInterval(chartPollingRef.current);
-        chartPollingRef.current = null;
-      }
+      clearInterval(intervalId);
     };
   }, [chartTask?.task_id, chartTask?.status]);
 
@@ -673,18 +737,23 @@ export default function CoinDetailPage() {
     };
   }, [similarTask?.task_id, similarTask?.status]);
 
-  // --- 분석 시점 변경 시 자동으로 모든 분석 실행 ---
+  // --- 분석 시점 변경 시 또는 초기 로드 시 자동으로 모든 분석 실행 ---
   useEffect(() => {
     if (!selectedTimestamp || !coinSymbol || !coinInfo) {
       return;
     }
 
-    // 4가지 분석을 모두 동시에 실행
+    // LightGBM 및 차트 분석은 항상 실행
     handleModelExplain();
     handleChartExplain();
     handleSimilarChart();
     handleScoreChart();
-  }, [selectedTimestamp]);
+
+    // Transformer는 지원하는 코인만 실행
+    if (supportsTransformer) {
+      handleTransformerExplain();
+    }
+  }, [selectedTimestamp, coinInfo]); // coinInfo도 의존성에 추가하여 초기 로드 시에도 실행
 
   // --- 핸들러 1: AI 모델 분석 (KeyError 해결 + Polling 시작 수정) ---
   const handleModelExplain = async () => {
@@ -699,15 +768,16 @@ export default function CoinDetailPage() {
       return;
     }
     const normalizedTimestamp = toHourPrecision(selectedTimestamp);
-    const inferenceTime = formatKstNaiveString(normalizedTimestamp);
+    const inferenceTime = convertKstToUtc(normalizedTimestamp);
 
-    console.log("[model] 분석 요청 시간 (KST 기준):", inferenceTime);
+    console.log("[model] 분석 요청 시간 (UTC 기준):", inferenceTime);
 
     try {
       const res = await fetchWithAuth("http://localhost:8000/explain/model/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          model_name: "LightGBM",
           coin_symbol: coinSymbol,
           timeframe: 60,
           inference_time: inferenceTime,
@@ -737,6 +807,58 @@ export default function CoinDetailPage() {
     }
   };
 
+  // --- 핸들러 1-1: Transformer 모델 분석 ---
+  const handleTransformerExplain = async () => {
+    if (!coinSymbol) return;
+    setTransformerLoading(true);
+    setTransformerError(null);
+    setTransformerTask(null);
+
+    if (!selectedTimestamp) {
+      setTransformerError("시점을 선택한 후 요청해 주세요.");
+      setTransformerLoading(false);
+      return;
+    }
+    const normalizedTimestamp = toHourPrecision(selectedTimestamp);
+    const inferenceTime = convertKstToUtc(normalizedTimestamp);
+
+    console.log("[transformer] 분석 요청 시간 (UTC 기준):", inferenceTime);
+
+    try {
+      const res = await fetchWithAuth("http://localhost:8000/explain/model/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: "Transformer",
+          coin_symbol: coinSymbol,
+          timeframe: 60,
+          inference_time: inferenceTime,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+         console.error("[transformer] API 요청 실패:", data.detail || "알 수 없는 서버 에러");
+         throw new Error(data.detail || "Transformer 모델 분석 요청 실패");
+      }
+
+      const initialTaskStatus: ApiTaskResponse = {
+        task_id: data.task_id,
+        status: "PENDING",
+        results: null
+      };
+
+      console.log("[transformer] Task ID 수신 성공, 폴링 시작:", initialTaskStatus);
+      setTransformerTask(initialTaskStatus);
+
+    } catch (err: any) {
+      console.error("[transformer] handleExplainRequest CATCH 블록 에러:", err.message);
+      setTransformerLoading(false);
+      setTransformerError(err.message);
+    }
+  };
+
   // --- 핸들러 2: 차트 기술적 분석 (Polling 시작 수정) ---
   const handleChartExplain = async () => {
     if (!coinSymbol) return; // coinSymbol이 없으면 실행 중지
@@ -750,8 +872,8 @@ export default function CoinDetailPage() {
       return;
     }
     const normalizedTimestamp = toHourPrecision(selectedTimestamp);
-    const inferenceTime = formatKstNaiveString(normalizedTimestamp);
-    console.log("[chart] 분석 요청 시간 (KST 기준):", inferenceTime);
+    const inferenceTime = convertKstToUtc(normalizedTimestamp);
+    console.log("[chart] 분석 요청 시간 (UTC 기준):", inferenceTime);
 
     try {
       const res = await fetchWithAuth("http://localhost:8000/explain/chart/", {
@@ -805,9 +927,9 @@ export default function CoinDetailPage() {
     }
 
     const normalizedTimestamp = toHourPrecision(selectedTimestamp);
-    const inferenceTime = formatKstNaiveString(normalizedTimestamp);
+    const inferenceTime = convertKstToUtc(normalizedTimestamp);
 
-    console.log("[score] 분석 요청 시간 (KST 기준):", inferenceTime);
+    console.log("[score] 분석 요청 시간 (UTC 기준):", inferenceTime);
 
     try {
       const response = await fetchWithAuth("http://localhost:8000/score-chart/", {
@@ -859,9 +981,9 @@ export default function CoinDetailPage() {
     }
 
     const normalizedTimestamp = toHourPrecision(selectedTimestamp);
-    const inferenceTime = formatKstNaiveString(normalizedTimestamp);
+    const inferenceTime = convertKstToUtc(normalizedTimestamp);
 
-    console.log("[similar] 분석 요청 시간 (KST 기준):", inferenceTime);
+    console.log("[similar] 분석 요청 시간 (UTC 기준):", inferenceTime);
 
     try {
       const response = await fetchWithAuth("http://localhost:8000/explain/similar_chart/", {
@@ -897,6 +1019,7 @@ export default function CoinDetailPage() {
   };
   
   const modelResults = modelTask?.results as ExplainModelResult | null;
+  const transformerResults = transformerTask?.results as ExplainModelResult | null;
   const chartResults = chartTask?.results as ExplainChartResult | null;
   const similarResults = similarTask?.results as ExplainSimilarChartResult | null;
 
@@ -1004,17 +1127,11 @@ export default function CoinDetailPage() {
               step={3600}
               value={selectedTimestamp}
               onChange={(e) => setSelectedTimestamp(e.target.value)}
-              min={coinInfo ? isoToLocalDateTime(coinInfo.available_start) : undefined}
-              max={coinInfo ? isoToLocalDateTime(coinInfo.available_end) : undefined}
               className="p-2 bg-gray-700 text-white rounded-lg border border-gray-600"
             />
-            <p className="text-sm text-gray-400">
-              (분석 가능 기간: {coinInfo.available_start?.split(' ')[0] || coinInfo.available_start} ~
-              {coinInfo.available_end?.split(' ')[0] || coinInfo.available_end})
-            </p>
           </div>
         ) : (
-          <p className="text-gray-500">분석 가능 기간 로딩 중...</p>
+          <p className="text-gray-500">코인 정보 로딩 중...</p>
         )}
         
         {/* ★★★ coinSymbol이 string일 때만 차트를 렌더링 ★★★ */}
@@ -1037,33 +1154,46 @@ export default function CoinDetailPage() {
         <div className="flex overflow-hidden rounded-lg border border-gray-700 bg-gray-900">
           <button
             type="button"
-            onClick={() => setActiveTab("model")}
+            onClick={() => setActiveTab("lightgbm")}
             className={`flex-1 py-3 text-sm font-semibold transition ${
-              activeTab === "model"
+              activeTab === "lightgbm"
                 ? "bg-gray-800 text-white"
                 : "text-gray-400 hover:bg-gray-800 hover:text-white"
             }`}
           >
-            AI 모델 분석
+            LightGBM 모델
           </button>
+          {supportsTransformer && (
             <button
               type="button"
-              onClick={() => setActiveTab("chart")}
+              onClick={() => setActiveTab("transformer")}
               className={`flex-1 py-3 text-sm font-semibold transition ${
-                activeTab === "chart"
+                activeTab === "transformer"
                   ? "bg-gray-800 text-white"
                   : "text-gray-400 hover:bg-gray-800 hover:text-white"
               }`}
             >
-              차트 기술적 분석
+              Transformer 모델
             </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setActiveTab("chart")}
+            className={`flex-1 py-3 text-sm font-semibold transition ${
+              activeTab === "chart"
+                ? "bg-gray-800 text-white"
+                : "text-gray-400 hover:bg-gray-800 hover:text-white"
+            }`}
+          >
+            차트 기술적 분석
+          </button>
         </div>
 
         <div className="mt-6 space-y-6">
-          {activeTab === "model" ? (
+          {activeTab === "lightgbm" ? (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
-                <p className="text-lg font-semibold text-white">AI 모델 분석</p>
+                <p className="text-lg font-semibold text-white">LightGBM 모델 분석</p>
                 <button
                   onClick={handleModelExplain}
                   disabled={modelLoading || !coinSymbol}
@@ -1077,68 +1207,188 @@ export default function CoinDetailPage() {
                 >
                   {(modelLoading || (modelTask?.status === "STARTED" || modelTask?.status === "PENDING"))
                     ? "분석 중..."
-                    : "모델 분석 실행"}
+                    : "분석 시작"}
                 </button>
               </div>
+
+              {/* 에러 메시지 */}
               {modelError && <p className="text-red-400 text-center">{modelError}</p>}
+
+              {/* 로딩 메시지 */}
               {(modelLoading ||
                 (modelTask?.status === "STARTED" || modelTask?.status === "PENDING")) && (
-                <p className="text-gray-500 text-center">AI가 분석 중입니다 (약 15~30초)...</p>
+                <p className="text-gray-500 text-center">LightGBM AI가 분석 중입니다 (약 15~30초)...</p>
               )}
+
+              {/* LightGBM 결과 */}
               {modelTask?.status === "SUCCESS" && modelResults && (
-                <div className="space-y-6">
-              <div className="text-center">
-                <p className="text-lg text-gray-400">모델 추천</p>
-                <p
-                  className={`text-4xl font-bold ${getModelPercentileColor(
-                    modelResults.prediction_percentile
-                  )}`}
-                >
-                  {getRecommendationLabel(modelResults.recommendation)}
-                </p>
-                <p className="text-sm text-gray-400">
-                  <span
-                    className={getModelPercentileColor(modelResults.prediction_percentile)}
-                  >
-                    예측 상위 {modelResults.prediction_percentile.toFixed(1)}%
-                  </span>
-                </p>
-              </div>
+                <div className="space-y-4">
                   <div className="p-4 bg-gray-700 rounded-lg">
-                    <h3 className="text-xl font-semibold mb-2">AI 분석 요약</h3>
-                    <p className="text-gray-300 whitespace-pre-line">
+                    <div className="text-center">
+                      <p className="text-lg text-gray-400">모델 추천</p>
+                      <p
+                        className={`text-3xl font-bold ${getModelPercentileColor(
+                          modelResults.prediction_percentile
+                        )}`}
+                      >
+                        {getRecommendationLabel(modelResults.recommendation)}
+                      </p>
+                      <p className="text-sm text-gray-400">
+                        <span
+                          className={getModelPercentileColor(modelResults.prediction_percentile)}
+                        >
+                          예측 상위 {modelResults.prediction_percentile.toFixed(1)}%
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="p-4 bg-gray-700 rounded-lg">
+                    <h3 className="text-lg font-semibold mb-2">AI 분석 요약</h3>
+                    <p className="text-gray-300 text-sm whitespace-pre-line">
                       {renderBoldText(modelResults.explanation_text)}
                     </p>
                   </div>
+                </div>
+              )}
+
+              {/* LightGBM 상세 정보 (SHAP 등) */}
+              {modelTask?.status === "SUCCESS" && modelResults && (
+                <div className="space-y-4 p-4 bg-gray-800 rounded-lg border border-blue-500">
+                  <h2 className="text-2xl font-bold text-blue-400">LightGBM 상세 분석</h2>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                      <h3 className="text-xl font-semibold mb-2">SHAP 기여도</h3>
+                      <ShapChart shapValues={modelResults.shap_values} />
+                    </div>
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                      <h3 className="text-xl font-semibold mb-2">Feature / SHAP 값</h3>
+                      <div className="grid grid-cols-1 gap-2 text-sm text-gray-300">
+                        {Object.entries(modelResults.shap_values)
+                          .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
+                          .map(([featureKey, shapValueObj]) => {
+                            const featureValueObj = modelResults.feature_values[featureKey];
+                            // Use backend-provided descriptions with fallback
+                            const displayName = shapValueObj.display_name || getFeatureInfo(featureKey, "model").name;
+                            const interpretation = shapValueObj.interpretation || getFeatureInfo(featureKey, "model").description;
+                            return (
+                              <div
+                                key={featureKey}
+                                className="border border-gray-600 rounded-lg p-2 bg-gray-900"
+                                title={interpretation}
+                              >
+                                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                  <span>{displayName}</span>
+                                  <span>SHAP {shapValueObj.value.toFixed(4)}</span>
+                                </div>
+                                <p className="text-base text-white">
+                                  {Number.isFinite(featureValueObj?.value) ? featureValueObj.value.toFixed(4) : "-"}
+                                </p>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : activeTab === "transformer" ? (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                <p className="text-lg font-semibold text-white">Transformer 모델 분석</p>
+                <button
+                  onClick={handleTransformerExplain}
+                  disabled={transformerLoading || !coinSymbol}
+                  className={`px-4 py-2 font-bold text-white rounded-lg ${
+                    (transformerLoading ||
+                      (transformerTask?.status === "STARTED" || transformerTask?.status === "PENDING") ||
+                      !coinSymbol)
+                      ? "bg-gray-600 cursor-not-allowed"
+                      : "bg-purple-600 hover:bg-purple-700"
+                  }`}
+                >
+                  {(transformerLoading || (transformerTask?.status === "STARTED" || transformerTask?.status === "PENDING"))
+                    ? "분석 중..."
+                    : "분석 시작"}
+                </button>
+              </div>
+
+              {/* 에러 메시지 */}
+              {transformerError && <p className="text-red-400 text-center">{transformerError}</p>}
+
+              {/* 로딩 메시지 */}
+              {(transformerLoading ||
+                (transformerTask?.status === "STARTED" || transformerTask?.status === "PENDING")) && (
+                <p className="text-gray-500 text-center">Transformer AI가 분석 중입니다 (약 15~30초)...</p>
+              )}
+
+              {/* Transformer 결과 */}
+              {transformerTask?.status === "SUCCESS" && transformerResults && (
+                <div className="space-y-4">
                   <div className="p-4 bg-gray-700 rounded-lg">
-                    <ShapChart shapValues={modelResults.shap_values} />
+                    <div className="text-center">
+                      <p className="text-lg text-gray-400">모델 추천</p>
+                      <p
+                        className={`text-3xl font-bold ${getModelPercentileColor(
+                          transformerResults.prediction_percentile
+                        )}`}
+                      >
+                        {getRecommendationLabel(transformerResults.recommendation)}
+                      </p>
+                      <p className="text-sm text-gray-400">
+                        <span
+                          className={getModelPercentileColor(transformerResults.prediction_percentile)}
+                        >
+                          예측 상위 {transformerResults.prediction_percentile.toFixed(1)}%
+                        </span>
+                      </p>
+                    </div>
                   </div>
                   <div className="p-4 bg-gray-700 rounded-lg">
-                    <h3 className="text-xl font-semibold mb-2">Feature / SHAP 값</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
-                      {Object.entries(modelResults.shap_values)
-                        .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
-                        .map(([featureKey, shapValueObj]) => {
-                          const featureValueObj = modelResults.feature_values[featureKey];
-                          // Use backend-provided descriptions with fallback
-                          const displayName = shapValueObj.display_name || getFeatureInfo(featureKey, "model").name;
-                          const interpretation = shapValueObj.interpretation || getFeatureInfo(featureKey, "model").description;
-                          return (
-                            <div
-                              key={featureKey}
-                              className="border border-gray-600 rounded-lg p-2 bg-gray-900"
-                              title={interpretation}
-                            >
-                              <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                <span>{displayName}</span>
-                                <span>SHAP {shapValueObj.value.toFixed(4)}</span>
+                    <h3 className="text-lg font-semibold mb-2">AI 분석 요약</h3>
+                    <p className="text-gray-300 text-sm whitespace-pre-line">
+                      {renderBoldText(transformerResults.explanation_text)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Transformer 상세 정보 (SHAP 등) */}
+              {transformerTask?.status === "SUCCESS" && transformerResults && (
+                <div className="space-y-4 p-4 bg-gray-800 rounded-lg border border-purple-500">
+                  <h2 className="text-2xl font-bold text-purple-400">Transformer 상세 분석</h2>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                      <h3 className="text-xl font-semibold mb-2">SHAP 기여도</h3>
+                      <ShapChart shapValues={transformerResults.shap_values} />
+                    </div>
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                      <h3 className="text-xl font-semibold mb-2">Feature / SHAP 값</h3>
+                      <div className="grid grid-cols-1 gap-2 text-sm text-gray-300">
+                        {Object.entries(transformerResults.shap_values)
+                          .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
+                          .map(([featureKey, shapValueObj]) => {
+                            const featureValueObj = transformerResults.feature_values[featureKey];
+                            // Use backend-provided descriptions with fallback
+                            const displayName = shapValueObj.display_name || getFeatureInfo(featureKey, "model").name;
+                            const interpretation = shapValueObj.interpretation || getFeatureInfo(featureKey, "model").description;
+                            return (
+                              <div
+                                key={featureKey}
+                                className="border border-gray-600 rounded-lg p-2 bg-gray-900"
+                                title={interpretation}
+                              >
+                                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                  <span>{displayName}</span>
+                                  <span>SHAP {shapValueObj.value.toFixed(4)}</span>
+                                </div>
+                                <p className="text-base text-white">
+                                  {Number.isFinite(featureValueObj?.value) ? featureValueObj.value.toFixed(4) : "-"}
+                                </p>
                               </div>
-                              <p className="text-base text-white">
-                                {Number.isFinite(featureValueObj?.value) ? featureValueObj.value.toFixed(4) : "-"}
-                              </p>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1241,9 +1491,19 @@ export default function CoinDetailPage() {
                       {Object.entries(chartResults.feature_values)
                         .sort(([, a], [, b]) => Math.abs(b.value) - Math.abs(a.value))
                         .map(([featureKey, featureValue]) => {
-                          // Use backend-provided descriptions if available, otherwise fall back to client-side lookup
+                          // Use backend-provided descriptions only
                           const displayName = featureValue.display_name || getFeatureInfo(featureKey, "chart").name;
-                          const interpretation = featureValue.interpretation || getFeatureInfo(featureKey, "chart").description;
+                          const interpretation = featureValue.interpretation || "";
+
+                          // 퍼센트 값인지 확인 (pct, change, return 등의 키워드 포함 시)
+                          const isPercentage = featureKey.toLowerCase().includes('pct') ||
+                                               featureKey.toLowerCase().includes('change') ||
+                                               featureKey.toLowerCase().includes('return');
+
+                          const displayValue = isPercentage
+                            ? `${(featureValue.value * 100).toFixed(2)}%`
+                            : featureValue.value.toFixed(2);
+
                           return (
                             <div
                               key={featureKey}
@@ -1255,9 +1515,8 @@ export default function CoinDetailPage() {
                               </div>
                               <p
                                 className="text-xl font-semibold text-white"
-                                title={interpretation}
                               >
-                                {featureValue.value.toFixed(2)}
+                                {displayValue}
                               </p>
                               <p className="text-xs text-gray-400">{interpretation}</p>
                             </div>
@@ -1292,6 +1551,7 @@ export default function CoinDetailPage() {
                               <th className="py-2 pr-4 text-left">지표</th>
                               <th className="py-2 px-4 text-left">범위</th>
                               <th className="py-2 px-4 text-left">숫자</th>
+                              <th className="py-2 px-4 text-left">백분위</th>
                               <th className="py-2 px-4 text-left">설명</th>
                             </tr>
                           </thead>
@@ -1299,8 +1559,12 @@ export default function CoinDetailPage() {
                             {SCORE_METRIC_META.map((metric) => {
                               const metricResult = scoreResults?.[metric.key];
                               const scoreValue = metricResult?.score;
+                              const percentile = metricResult?.percentile;
                               const displayValue = Number.isFinite(scoreValue ?? NaN)
                                 ? scoreValue!.toFixed(1)
+                                : "-";
+                              const displayPercentile = Number.isFinite(percentile ?? NaN)
+                                ? `상위 ${percentile!.toFixed(1)}%`
                                 : "-";
                               const explanationText =
                                 metricResult?.explanation ?? metric.description;
@@ -1321,6 +1585,9 @@ export default function CoinDetailPage() {
                                     >
                                       {displayValue}
                                     </span>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm font-semibold text-blue-300">
+                                    {displayPercentile}
                                   </td>
                                   <td className="py-3 px-4 text-xs text-gray-200 leading-relaxed">
                                 <p className="text-sm text-gray-100 mb-1">

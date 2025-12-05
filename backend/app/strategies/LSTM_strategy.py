@@ -205,7 +205,7 @@ class LSTMStrategy(Strategy):
             }
 
         train_fe = self._feature_engineering(train_df).dropna().reset_index(drop=True)
-        infer_fe = self._feature_engineering(inference_df).dropna().reset_index(drop=True)
+        infer_fe = self._feature_engineering(inference_df).dropna(subset=LSTMStrategy.feature_cols).reset_index(drop=True)
 
         X_train = train_fe[LSTMStrategy.feature_cols].astype("float32").values 
         X_infer = infer_fe[LSTMStrategy.feature_cols].astype("float32").values  
@@ -305,7 +305,7 @@ class LSTMStrategy(Strategy):
             return []
 
         train_fe = self._feature_engineering(train_df).dropna()
-        infer_fe = self._feature_engineering(inference_df).dropna()
+        infer_fe = self._feature_engineering(inference_df).dropna(subset=self.feature_cols)
 
         X_train = train_fe[self.feature_cols].astype("float32").values
         X_infer = infer_fe[self.feature_cols].astype("float32").values

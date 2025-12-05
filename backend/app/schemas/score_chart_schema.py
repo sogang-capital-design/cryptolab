@@ -13,6 +13,7 @@ class ScoreChartResponse(BaseModel):
 
 class ScoreWithExplanation(BaseModel):
     score: float
+    percentile: float
     explanation: str
 
 class ScoreChartTaskResponse(BaseModel):

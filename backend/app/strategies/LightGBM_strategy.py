@@ -8,19 +8,14 @@ from tqdm import tqdm
 
 from app.strategies.strategy import Strategy
 
+import warnings
+warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
+
 class LightGBMStrategy(Strategy):
 
     strategy_type = 'tree_based'
     inference_window = 100
     hyperparam_schema = {
-        "buy_threshold": {
-            "default": 0.05,
-            "type": "float",
-        },
-        "sell_threshold": {
-            "default": -0.05,
-            "type": "float",
-        },
         "learning_rate": {
             "default": 0.05,
             "type": "float",
@@ -53,29 +48,7 @@ class LightGBMStrategy(Strategy):
         return self.hyperparams.get(name, default)
 
     def action(self, inference_df: pd.DataFrame, cash_balance: float, coin_balance: float) -> tuple[int, float]:
-        buy_threshold = self._get_hyperparams('buy_threshold')
-        sell_threshold = self._get_hyperparams('sell_threshold')
-
-        _, features_df = self._get_X_and_y(inference_df)
-        model_input = features_df.iloc[-1].values.reshape(1, -1)
-        model_output = float(self.model.predict(model_input)[0])
-        model_output = (np.exp(model_output) * 100) - 100
-
-        if model_output < sell_threshold:
-            action = -1  # Sell
-        elif model_output > buy_threshold:
-            action = 1  # Buy
-        else:
-            action = 0
-
-        current_price = inference_df.iloc[-1]['close']
-        if action == -1:
-            amount = coin_balance
-        elif action == 1:
-            amount = (cash_balance / current_price) * 0.9
-        else:
-            amount = 0.0
-        return action, amount
+        raise NotImplementedError("LightGBMStrategy does not support action method. Use explain() method for model explanations.")
     
     def explain(self, train_df: pd.DataFrame, inference_df: pd.DataFrame) -> dict[str]:
         train_df, _ = self._get_X_and_y(train_df)
@@ -112,6 +85,8 @@ class LightGBMStrategy(Strategy):
                 if price_selected:
                     continue
                 price_selected = True
+            if not np.isfinite(feature_value_dict[feat]):
+                continue
             topk_features.append(feat)
             if len(topk_features) >= TOPK:
                 break
@@ -154,67 +129,34 @@ class LightGBMStrategy(Strategy):
         return similar_samples
 
     def train(self, train_df: pd.DataFrame, hyperparams: dict) -> None:
-        self.hyperparams = hyperparams
-
-        lgb_hyperparams = {
-            'objective': 'regression_l1',
-            'metric': 'l1',
-            'boosting_type': 'gbdt',
-            'learning_rate': self._get_hyperparams('learning_rate'),
-            'num_leaves': self._get_hyperparams('num_leaves'),
-            'feature_fraction': self._get_hyperparams('feature_fraction'),
-            'min_data_in_leaf': self._get_hyperparams('min_data_in_leaf'),
-            "n_jobs": -1,
-        }
-
-        X, y = self._get_X_and_y(train_df)
-
-        def balance_indices(y, random_state=42):
-            rng = np.random.default_rng(random_state)
-            pos_idx = np.where(y > 0)[0]
-            neg_idx = np.where(y <= 0)[0]
-            
-            n = min(len(pos_idx), len(neg_idx))
-            pos_sample = rng.choice(pos_idx, n, replace=False)
-            neg_sample = rng.choice(neg_idx, n, replace=False)
-            
-            sel_idx = np.sort(np.concatenate([pos_sample, neg_sample]))
-            return sel_idx
-
-        sel_idx = balance_indices(y)
-        X = X.iloc[sel_idx]
-        y = y.iloc[sel_idx]
-
-        def tqdm_bar_callback(total_rounds):
-            pbar = tqdm(total=total_rounds, desc="LightGBM Training", leave=True)
-            def _callback(env):
-                pbar.update(1)
-                if env.iteration + 1 == total_rounds:
-                    pbar.close()
-            return _callback
-
-        lgb_dataset = lgb.Dataset(X, label=y)
-        self.model = lgb.train(
-            params=lgb_hyperparams,
-            train_set=lgb_dataset,
-            num_boost_round=self._get_hyperparams('num_boost_round'),
-            callbacks=[tqdm_bar_callback(self._get_hyperparams('num_boost_round'))]
-        )
-        print(self.model.params)
+        raise NotImplementedError("LightGBMStrategy does not support train method. Use load() to load a pre-trained model.")
 
     def _get_X_and_y(self, df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
         data_df = df.copy()
-        for col in ['open', 'high', 'low', 'close', 'volume', 'value']:
-            if col in data_df.columns:
-                data_df.drop(columns=[col], inplace=True)
-        data_df.rename(columns={"price_usd": "price"}, inplace=True)
-        all_cols = data_df.columns.tolist().copy()
+        data_df = data_df.drop(columns=['inst_inflow', 'inst_outflow'])
+        all_cols = list(data_df.columns).copy()
+        for col_name in all_cols:
+            if 'volume' in col_name:
+                usd_volume_name = col_name.replace('volume', 'usd_volume')
+                data_df[usd_volume_name] = data_df[col_name] * data_df["price"]
+                data_df = data_df.drop(columns=[col_name])
+
+        all_cols = list(data_df.columns).copy()
+
+        body = (data_df["close"] - data_df["open"]).abs()
+        upper_wick = data_df["high"] - data_df[["close","open"]].max(axis=1)
+        lower_wick = data_df[["close","open"]].min(axis=1) - data_df["low"]
+
+        data_df["body_pct"] = body / (data_df["high"] - data_df["low"] + 1e-8)
+        data_df["upper_wick_pct"] = upper_wick / (data_df["high"] - data_df["low"] + 1e-8)
+        data_df["lower_wick_pct"] = lower_wick / (data_df["high"] - data_df["low"] + 1e-8)
 
         # 퍼센트 차이
-        time_diffs = [1, 3, 6, 12, 24, 48]
+        time_diffs = [1, 3, 6, 12, 24]
         for time_diff in time_diffs:
             for col in all_cols:
-                data_df[f"{col}_pct_change_{time_diff}h"] = data_df[col].pct_change(time_diff)
+                if col not in ['open', 'high', 'low', 'close']:
+                    data_df[f"{col}_pct_change_{time_diff}h"] = data_df[col].pct_change(time_diff)
 
         # 볼린저 밴드
         hband = ta.volatility.BollingerBands(data_df["price"]).bollinger_hband()
@@ -222,24 +164,43 @@ class LightGBMStrategy(Strategy):
         data_df['rel_dist_to_bb_upper'] = (hband - data_df["price"]) / data_df["price"]
         data_df['rel_dist_to_bb_lower'] = (data_df["price"] - lband) / data_df["price"]
 
+        # EMA
+        ema_20 = ta.trend.EMAIndicator(data_df["price"], window=20).ema_indicator()
+        ema_60 = ta.trend.EMAIndicator(data_df["price"], window=60).ema_indicator()
+        data_df['rel_dist_to_ema_20'] = (ema_20 - data_df["price"]) / data_df["price"]
+        data_df['rel_dist_to_ema_60'] = (ema_60 - data_df["price"]) / data_df["price"]
+
         # RSI
         data_df['rsi'] = ta.momentum.RSIIndicator(data_df["price"]).rsi()
-        time_diffs = [1, 6, 24]
         for time_diff in time_diffs:
             data_df[f'rsi_pct_change_{time_diff}'] = data_df['rsi'].pct_change(time_diff)
 
+        # MACD
+        data_df["macd"] = ta.trend.MACD(close=data_df["price"]).macd()
+        for time_diff in time_diffs:
+            data_df[f'macd_pct_change_{time_diff}'] = data_df['macd'].pct_change(time_diff)
+
+        # ATR
+        atr = ta.volatility.AverageTrueRange(
+            high=data_df["high"],
+            low=data_df["low"],
+            close=data_df["close"]
+        )
+        data_df["atr"] = atr.average_true_range()
+        for time_diff in time_diffs:
+            data_df[f'atr_pct_change_{time_diff}'] = data_df['atr'].pct_change(time_diff)
+
+        data_df = data_df.drop(columns=['open', 'high', 'low', 'close'])
+        data_df = data_df.copy()
+
         X = data_df.copy()
-        
-        # 로그 수익률 target
+        X = X.drop(columns=['price'])
+
+        # 로그 수익률 target (사용하지 않지만 호환성을 위해 유지)
         y = np.log(data_df['price'].shift(-1) / data_df['price'])
 
-        X_valid_idx = X.isna().sum(axis=1) == 0
-        y_valid_idx = y.notna()
-        valid_idx = X_valid_idx & y_valid_idx
-        X = X[valid_idx]
-        y = y[valid_idx]
         return X, y
-
+    
     def load(self, path: str) -> None:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
