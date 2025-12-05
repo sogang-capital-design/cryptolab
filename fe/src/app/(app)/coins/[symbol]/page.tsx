@@ -488,9 +488,9 @@ export default function CoinDetailPage() {
         if (data.status !== "PENDING" && data.status !== "STARTED") {
           setModelLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         setModelLoading(false);
-        setModelError(err.message);
+        setModelError(err instanceof Error ? err.message : "Unknown error");
         console.error("[model] 폴링 중 에러:", err);
       }
     };
@@ -544,9 +544,9 @@ export default function CoinDetailPage() {
         if (data.status !== "PENDING" && data.status !== "STARTED") {
           setTransformerLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         setTransformerLoading(false);
-        setTransformerError(err.message);
+        setTransformerError(err instanceof Error ? err.message : "Unknown error");
         console.error("[transformer] 폴링 중 에러:", err);
       }
     };
@@ -597,13 +597,13 @@ export default function CoinDetailPage() {
         if (data.status !== "PENDING" && data.status !== "STARTED") {
           setScoreLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (scorePollingRef.current) {
           clearInterval(scorePollingRef.current);
           scorePollingRef.current = null;
         }
         setScoreLoading(false);
-        setScoreError(err.message);
+        setScoreError(err instanceof Error ? err.message : "Unknown error");
         console.error("[score] 폴링 중 에러:", err);
       }
     };
@@ -661,9 +661,9 @@ export default function CoinDetailPage() {
         if (data.status !== "PENDING" && data.status !== "STARTED") {
           setChartLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         setChartLoading(false);
-        setChartError(err.message);
+        setChartError(err instanceof Error ? err.message : "Unknown error");
         console.error("[chart] 폴링 중 에러:", err);
       }
     };
@@ -715,13 +715,13 @@ export default function CoinDetailPage() {
         if (data.status !== "PENDING" && data.status !== "STARTED") {
           setSimilarLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (similarPollingRef.current) {
           clearInterval(similarPollingRef.current);
           similarPollingRef.current = null;
         }
         setSimilarLoading(false);
-        setSimilarError(err.message);
+        setSimilarError(err instanceof Error ? err.message : "Unknown error");
         console.error("[similar] 폴링 중 에러:", err);
       }
     };
@@ -800,10 +800,10 @@ export default function CoinDetailPage() {
       console.log("[model] Task ID 수신 성공, 폴링 시작:", initialTaskStatus);
       setModelTask(initialTaskStatus); 
 
-    } catch (err: any) {
-      console.error("[model] handleExplainRequest CATCH 블록 에러:", err.message);
+    } catch (err: unknown) {
+      console.error("[model] handleExplainRequest CATCH 블록 에러:", err instanceof Error ? err.message : "Unknown error");
       setModelLoading(false);
-      setModelError(err.message);
+      setModelError(err instanceof Error ? err.message : "Unknown error");
     }
   };
 
@@ -852,10 +852,10 @@ export default function CoinDetailPage() {
       console.log("[transformer] Task ID 수신 성공, 폴링 시작:", initialTaskStatus);
       setTransformerTask(initialTaskStatus);
 
-    } catch (err: any) {
-      console.error("[transformer] handleExplainRequest CATCH 블록 에러:", err.message);
+    } catch (err: unknown) {
+      console.error("[transformer] handleExplainRequest CATCH 블록 에러:", err instanceof Error ? err.message : "Unknown error");
       setTransformerLoading(false);
-      setTransformerError(err.message);
+      setTransformerError(err instanceof Error ? err.message : "Unknown error");
     }
   };
 
@@ -902,10 +902,10 @@ export default function CoinDetailPage() {
       console.log("[chart] Task ID 수신 성공, 폴링 시작:", initialTaskStatus);
       setChartTask(initialTaskStatus); 
 
-    } catch (err: any) {
-      console.error("[chart] handleChartExplain CATCH 블록 에러:", err.message);
+    } catch (err: unknown) {
+      console.error("[chart] handleChartExplain CATCH 블록 에러:", err instanceof Error ? err.message : "Unknown error");
       setChartLoading(false);
-      setChartError(err.message);
+      setChartError(err instanceof Error ? err.message : "Unknown error");
     }
   };
 
@@ -956,10 +956,10 @@ export default function CoinDetailPage() {
         results: null,
       });
       console.log("[score] Task ID 수신 성공, 폴링 시작:", data.task_id);
-    } catch (err: any) {
-      console.error("[score] handleScoreChart CATCH 블록 에러:", err.message);
+    } catch (err: unknown) {
+      console.error("[score] handleScoreChart CATCH 블록 에러:", err instanceof Error ? err.message : "Unknown error");
       setScoreLoading(false);
-      setScoreError(err.message);
+      setScoreError(err instanceof Error ? err.message : "Unknown error");
     }
   };
 
@@ -1011,10 +1011,10 @@ export default function CoinDetailPage() {
         results: null,
       });
       console.log("[similar] Task ID 수신 성공, 폴링 시작:", data.task_id);
-    } catch (err: any) {
-      console.error("[similar] handleSimilarChart CATCH 블록 에러:", err.message);
+    } catch (err: unknown) {
+      console.error("[similar] handleSimilarChart CATCH 블록 에러:", err instanceof Error ? err.message : "Unknown error");
       setSimilarLoading(false);
-      setSimilarError(err.message);
+      setSimilarError(err instanceof Error ? err.message : "Unknown error");
     }
   };
   

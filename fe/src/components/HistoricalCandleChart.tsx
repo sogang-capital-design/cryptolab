@@ -3,27 +3,35 @@
 
 import { useState, useEffect } from "react";
 // ★★★ 1. TimeSeriesScale을 제거하고 필요한 모듈만 임포트 ★★★
-import { 
-  Chart, 
+import {
+  Chart,
   TimeScale,            // 시간 축 (X축)
   LinearScale,          // 선형 축 (Y축)
   PointElement,
   Tooltip,
-  Legend
+  Legend,
+  ChartOptions
 } from "chart.js";
 import { CandlestickController, CandlestickElement, OhlcController, OhlcElement } from "chartjs-chart-financial";
 import { Chart as ReactChartJs } from "react-chartjs-2";
 import "chartjs-adapter-date-fns";
 
+interface CurrentLinePluginOptions {
+  value?: number;
+  color?: string;
+  lineWidth?: number;
+  dash?: number[];
+}
+
 const currentLinePlugin = {
   id: "currentLine",
   afterDraw(chart: Chart) {
     const ctx = chart.ctx;
-    const pluginOptions = (chart.options?.plugins as any)?.currentLine;
+    const pluginOptions = (chart.options?.plugins as Record<string, CurrentLinePluginOptions>)?.currentLine;
     const value = pluginOptions?.value;
     if (value === undefined || value === null) return;
     if (!chart.chartArea) return;
-    const xScale = chart.scales.x as any;
+    const xScale = chart.scales.x;
     if (!xScale?.getPixelForValue) return;
     const pixel = xScale.getPixelForValue(value);
     if (pixel < chart.chartArea.left || pixel > chart.chartArea.right) return;
@@ -123,8 +131,8 @@ export default function HistoricalCandleChart({
         }));
 
         setCandles(candleData);
-      } catch (err: any) {
-        setError(err.message || "OHLCV 데이터를 불러오는데 실패했습니다.");
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "OHLCV 데이터를 불러오는데 실패했습니다.");
       } finally {
         setLoading(false);
       }
@@ -156,7 +164,7 @@ export default function HistoricalCandleChart({
 
   // --- 차트 옵션 ---
   const highlightMs = highlightTimestamp ? new Date(highlightTimestamp).getTime() : undefined;
-  const chartOptions: any = {
+  const chartOptions = {
     responsive: true,
     maintainAspectRatio: false, 
     parsing: false, 
@@ -229,7 +237,7 @@ export default function HistoricalCandleChart({
   const containerHeight = height ?? "300px";
   return (
     <div className="p-4" style={{ height: containerHeight }}>
-      <ReactChartJs type="candlestick" data={chartData} options={chartOptions} />
+      <ReactChartJs type="candlestick" data={chartData} options={chartOptions as ChartOptions<'candlestick'>} />
     </div>
   );
 }

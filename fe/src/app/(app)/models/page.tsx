@@ -2,7 +2,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { fetchWithAuth } from "./layout"; // 인증 레이아웃의 fetch 함수
 import Link from "next/link";
 
 // API 응답 타입
@@ -12,8 +11,14 @@ interface ModelListResponse {
 interface CoinListResponse {
   available_coin_symbols: string[];
 }
+interface HyperparamInfo {
+  title?: string;
+  type?: string;
+  default?: string | number;
+  description?: string;
+}
 interface ModelInfoResponse {
-  hyperparam_schema: { [paramName: string]: any };
+  hyperparam_schema: { [paramName: string]: HyperparamInfo };
 }
 
 export default function ModelsPage() {
@@ -25,7 +30,6 @@ export default function ModelsPage() {
   const [selectedCoin, setSelectedCoin] = useState<string>("");
 
   const [schema, setSchema] = useState<ModelInfoResponse | null>(null);
-  const [formData, setFormData] = useState<{ [key: string]: any }>({});
   
   const [loading, setLoading] = useState({
     page: true,
@@ -79,8 +83,6 @@ export default function ModelsPage() {
         if (response.ok) {
           const data: ModelInfoResponse = await response.json();
           setSchema(data);
-          // 스키마가 로드되면 폼 데이터 초기화
-          setFormData({}); 
         } else {
           setSchema(null);
         }
@@ -105,13 +107,6 @@ export default function ModelsPage() {
     setSchema(null); // 스키마 초기화
   };
 
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
-  };
   
   // --- 동적 폼 렌더링 함수 ---
   const renderDynamicForm = () => {
@@ -136,7 +131,6 @@ export default function ModelsPage() {
           id={key}
           name={key}
           defaultValue={info.default}
-          onChange={handleFormChange}
           className="w-full px-3 py-2 mt-1 border border-gray-600 rounded-md shadow-sm bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
         />
         {info.description && <p className="mt-1 text-xs text-gray-400">{info.description}</p>}
@@ -247,7 +241,7 @@ export default function ModelsPage() {
           
           {/* TODO: 날짜 선택기(Date Picker) 라이브러리 필요 */}
           <div className="text-gray-500 mb-4">
-            (여기에 '시작 날짜'와 '종료 날짜'를 선택하는 Date Picker가 들어가야 합니다.)
+            (여기에 &apos;시작 날짜&apos;와 &apos;종료 날짜&apos;를 선택하는 Date Picker가 들어가야 합니다.)
           </div>
 
           <button
