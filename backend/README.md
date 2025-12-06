@@ -24,6 +24,7 @@
 | `CELERY_RESULT_BACKEND` | `redis://localhost:6379/1` | Celery 결과 저장 백엔드 URL. |
 | `OHLCV_CONFIG_PATH` | `config/ohlcv_settings.yml` | OHLCV 수집 심볼/타임프레임 설정 파일 경로. |
 | `DEFAULT_TARGET_TIMEFRAMES` | `60m,240m,1d` | 설정 파일에 target 목록이 없을 때 사용할 기본 타임프레임 집합. |
+| `DUNE_API_KEY` | *(필수 설정)* | 온체인 데이터 수집을 위해 Dune API를 호출할 때 사용하는 API 키. |
 | `UPBIT_API_BASE_URL` | `https://api.upbit.com/v1` | Upbit REST API 기본 URL. |
 | `OHLCV_COLLECT_START` | `2024-01-01T00:00:00` | 최초 수집 시 수집 대상 기간의 최초 일시. 이 시점부터 서버 구동 시점까지를 수집합니다. |
 | `OHLCV_RETRY_LIMIT` | `1` | 누락 구간 재수집 최대 횟수. 실패 시 보간으로 대체. |

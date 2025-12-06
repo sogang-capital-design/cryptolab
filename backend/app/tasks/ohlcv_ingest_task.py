@@ -6,8 +6,10 @@ from celery.schedules import crontab
 from app.celery_app import celery_app
 from app.db.database import SessionLocal
 from app.services.ohlcv_service import ConfigurationError, OHLCVIngestService
+from app.services.onchain_service import OnchainIngestService
 
 service = OHLCVIngestService()
+onchain_service = OnchainIngestService()
 OFFSET_SECONDS = int(os.getenv("OHLCV_EXECUTION_OFFSET_SECONDS", "3"))
 
 
@@ -36,6 +38,7 @@ def collect_latest_ohlcv() -> None:
     session = SessionLocal()
     try:
         service.collect_latest(session)
+        onchain_service.collect_latest(session)
     finally:
         session.close()
 

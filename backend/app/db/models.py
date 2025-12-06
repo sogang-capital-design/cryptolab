@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, UniqueConstraint, func
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, UniqueConstraint, func, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db.database import Base
@@ -47,3 +47,47 @@ class OHLCVRange(Base):
     @property
     def as_tuple(self) -> tuple[datetime, datetime]:
         return self.start_timestamp, self.end_timestamp
+
+
+class Onchain(Base):
+    __tablename__ = "onchain"
+    hour = Column(DateTime, primary_key=True)
+    symbol = Column(String(50), primary_key=True)
+    total_volume = Column(Float, nullable=False)
+    total_tx_count = Column(Float, nullable=False)
+    cex_inflow = Column(Float, nullable=False)
+    cex_outflow = Column(Float, nullable=False)
+    cex_tx_count = Column(Float, nullable=False)
+    dex_inflow = Column(Float, nullable=False)
+    dex_outflow = Column(Float, nullable=False)
+    dex_tx_count = Column(Float, nullable=False)
+    inst_inflow = Column(Float, nullable=False)
+    inst_outflow = Column(Float, nullable=False)
+    inst_tx_count = Column(Float, nullable=False)
+
+
+class OnchainRange(Base):
+    __tablename__ = "onchain_range"
+    timeframe = Column(String(20), primary_key=True)
+    symbol = Column(String(50), primary_key=True)
+    start_timestamp = Column(DateTime, primary_key=True)
+    end_timestamp = Column(DateTime, primary_key=True)
+
+    @property
+    def as_tuple(self) -> tuple[datetime, datetime]:
+        return self.start_timestamp, self.end_timestamp
+
+
+class BinanceOHLCV(Base):
+    __tablename__ = "binance_ohlcv"
+    symbol = Column(String(50), primary_key=True)
+    timestamp = Column(DateTime, primary_key=True)
+    open_price = Column(Float, nullable=False)
+    high_price = Column(Float, nullable=False)
+    low_price = Column(Float, nullable=False)
+    close_price = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    trade_count = Column(Float, nullable=False)
+    __table_args__ = (
+        Index("idx_binance_ohlcv_timestamp", "timestamp"),
+    )

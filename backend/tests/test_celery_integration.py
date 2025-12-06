@@ -8,11 +8,12 @@ from app.tasks.ohlcv_ingest_task import collect_latest_ohlcv
 
 
 @pytest.fixture(autouse=True)
-def eager_celery():
+def eager_celery(monkeypatch):
     previous_always_eager = celery_app.conf.task_always_eager
     previous_propagates = celery_app.conf.task_eager_propagates
     celery_app.conf.task_always_eager = True
     celery_app.conf.task_eager_propagates = True
+    monkeypatch.setattr(ohlcv_ingest_task, "OFFSET_SECONDS", 0)
     try:
         yield
     finally:
@@ -42,7 +43,11 @@ def test_collect_latest_task_invokes_service(monkeypatch):
     dummy_service = DummyService()
     monkeypatch.setattr(ohlcv_ingest_task, "service", dummy_service)
 
+    dummy_onchain = DummyService()
+    monkeypatch.setattr(ohlcv_ingest_task, "onchain_service", dummy_onchain)
+
     async_result = collect_latest_ohlcv.delay()
     assert async_result.successful()
     assert dummy_service.call_count == 1
+    assert dummy_onchain.call_count == 1
     assert dummy_session.closed
