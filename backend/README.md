@@ -29,6 +29,12 @@
 | `OHLCV_COLLECT_START` | `2024-01-01T00:00:00` | 최초 수집 시 수집 대상 기간의 최초 일시. 이 시점부터 서버 구동 시점까지를 수집합니다. |
 | `OHLCV_RETRY_LIMIT` | `1` | 누락 구간 재수집 최대 횟수. 실패 시 보간으로 대체. |
 | `OHLCV_COLLECTION_INTERVAL_SECONDS` | `300` | 과거 주기형 스케줄용 값(하위 호환). |
-| `OHLCV_EXECUTION_OFFSET_SECONDS` | `3` | 정각 기준 몇 초 뒤에 수집 태스크를 실행할지 오프셋. |
+| `OHLCV_EXECUTION_OFFSET_SECONDS` | `1800` | 정각 기준 몇 초 뒤에 수집 태스크를 실행할지 오프셋. 1800 이상 base_timeframe 미만 권장. |
 
 > Celery beat은 최소 base 타임프레임을 기준으로 정시마다 태스크를 실행하며, 워커 시작 시 즉시 한 번 실행합니다.
+
+## OHLCV CONFIG 파일 작성시 주의사항
+- base_timeframe은 upbit의 QUOTATION API에서 지원하는 시간 단위만을 사용해야 하며, 60m이상을 권장합니다.
+- token_address는 해당 코인의 contract 주소를 의미하며, KRW-ETH를 제외하면 필수로 있어야 합니다.
+- target_timeframes 중 하나는 반드시 base_timeframe이어야 하며, 나머지는 그것의 배수여야 합니다.
+- KRW-USDT 관련 on-chain 데이터는 전역 on-chain 데이터로써 사용되므로, 항상 pairs에 있어야 합니다.
