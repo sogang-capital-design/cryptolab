@@ -10,6 +10,11 @@ from app.services.ohlcv_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def ensure_collect_start(monkeypatch):
+    monkeypatch.setenv("OHLCV_COLLECT_START", "2024-01-01T00:00:00")
+
+
 def test_ohlcv_range_calculator_subtract_handles_overlap():
     existing = [
         (
@@ -90,3 +95,20 @@ def test_harvest_range_interpolates_and_drops_trailing(monkeypatch):
     interpolated = harvested[1]
     assert interpolated["opening_price"] == actual_candles[start]["trade_price"]
     assert interpolated["trade_price"] == actual_candles[start]["trade_price"]
+
+
+def test_current_request_time_applies_offset(monkeypatch):
+    monkeypatch.setenv("OHLCV_EXECUTION_OFFSET_SECONDS", "1800")
+    service = OHLCVIngestService()
+
+    fake_now = datetime(2025, 1, 1, 2, 45, tzinfo=KST)
+
+    class DummyDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz == KST
+            return fake_now
+
+    monkeypatch.setattr("app.services.ohlcv_service.datetime", DummyDateTime)
+    expected = fake_now - timedelta(seconds=1800)
+    assert service._current_request_time() == expected

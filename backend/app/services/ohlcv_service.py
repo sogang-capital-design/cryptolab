@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Iterator, List, Sequence
 from zoneinfo import ZoneInfo
 
@@ -109,6 +109,7 @@ class SymbolTimeframeConfig:
     symbol: str
     base: TimeframeSpec
     targets: list[TimeframeSpec]
+    token_address: str | None = None
 
     def __post_init__(self) -> None:
         unique_targets = {tf.raw: tf for tf in self.targets}
@@ -118,6 +119,12 @@ class SymbolTimeframeConfig:
         self._timeframe_map = {tf.raw: tf for tf in self.targets}
         self._validate_base_supported()
         self.validate_hierarchy()
+
+    @property
+    def simple_symbol(self) -> str:
+        if "-" in self.symbol:
+            return self.symbol.split("-", 1)[1]
+        return self.symbol
 
     def _validate_base_supported(self) -> None:
         if self.base.unit == "m":
@@ -196,7 +203,8 @@ def load_symbol_configs(config_path: str, default_targets: Sequence[str]) -> lis
         targets_raw = item.get("target_timeframes") or list(default_targets)
         base = parse_timeframe(base_raw)
         targets = [parse_timeframe(raw) for raw in targets_raw]
-        configs.append(SymbolTimeframeConfig(symbol=symbol, base=base, targets=targets))
+        token_address = item.get("token_address")
+        configs.append(SymbolTimeframeConfig(symbol=symbol, base=base, targets=targets, token_address=token_address))
     return configs
 
 
@@ -219,7 +227,7 @@ class UpbitClient:
         endpoint = self._build_endpoint(timeframe)
         params = {"market": market, "count": count}
         if to is not None:
-            params["to"] = to.astimezone(KST).isoformat()
+            params["to"] = to.astimezone(timezone.utc).isoformat()
 
         last_exc: Exception | None = None
         for _ in range(self._max_http_retry):
@@ -317,6 +325,7 @@ class OHLCVIngestService:
             base_url=os.getenv("UPBIT_API_BASE_URL", "https://api.upbit.com/v1"),
         )
         self.collection_delay_seconds = int(os.getenv("OHLCV_COLLECTION_INTERVAL_SECONDS", "300"))
+        self.execution_offset_seconds = int(os.getenv("OHLCV_EXECUTION_OFFSET_SECONDS", "0"))
 
     @staticmethod
     def _parse_collect_start(raw: str | None) -> datetime:
@@ -338,7 +347,7 @@ class OHLCVIngestService:
         return min((cfg.base for cfg in self.symbol_configs), key=timeframe_sort_key)
 
     def collect_latest(self, session: Session) -> None:
-        request_time = datetime.now(tz=KST)
+        request_time = self._current_request_time()
         for cfg in self.symbol_configs:
             base = cfg.base
             end = align_timestamp(request_time, base)
@@ -354,6 +363,12 @@ class OHLCVIngestService:
             )
             self.collect_range(session, cfg.symbol, base.raw, start, end, request_time=request_time)
             session.commit()
+
+    def _current_request_time(self) -> datetime:
+        now = datetime.now(tz=KST)
+        if self.execution_offset_seconds > 0:
+            now -= timedelta(seconds=self.execution_offset_seconds)
+        return now
 
     def collect_range(self, session: Session, symbol: str, timeframe_raw: str, start: datetime, end: datetime, request_time: datetime | None = None) -> None:
         cfg = self.get_config(symbol)

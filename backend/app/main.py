@@ -56,11 +56,16 @@ def _run_initial_ingest() -> None:
     """Run a single OHLCV collection cycle before serving other endpoints."""
     from app.db.database import SessionLocal
     from app.services.ohlcv_service import OHLCVIngestService
+    from app.services.onchain_service import OnchainIngestService
+    from app.services.binance_csv_loader import BinanceCSVLoader
 
     session = SessionLocal()
     service = OHLCVIngestService()
+    onchain_service = OnchainIngestService()
     try:
+        BinanceCSVLoader().load_all(session)
         service.collect_latest(session)
+        onchain_service.collect_latest(session)
     finally:
         session.close()
     app.state.ingest_ready = True

@@ -3,6 +3,7 @@ import requests
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, List, Tuple
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
     from app.services.ohlcv_service import OHLCVIngestService
 
 _ingest_service: "OHLCVIngestService | None" = None
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 
@@ -48,29 +51,34 @@ def _get_ingest_service():
 
 
 def get_all_data_info() -> List[Tuple[str, pd.Timestamp, pd.Timestamp]]:
-    """
-    온체인 데이터가 있는 코인 목록을 반환합니다.
-    DB 대신 파일 시스템에서 사용 가능한 코인을 확인합니다.
-    """
-    data_path = _get_data_path()
-    onchain_data_path = os.path.join(data_path, 'onchain')
+    """Return available onchain coin ranges from the database."""
+    from app.db.database import SessionLocal
+    from app.db import models
 
-    data_info: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
+    session = SessionLocal()
+    try:
+        query = (
+            select(
+                models.OnchainRange.symbol,
+                func.min(models.OnchainRange.start_timestamp),
+                func.max(models.OnchainRange.end_timestamp),
+            )
+            .group_by(models.OnchainRange.symbol)
+        )
+        rows = session.execute(query).all()
+    finally:
+        session.close()
 
-    # 온체인 데이터 파일에서 코인 목록 추출
-    if os.path.exists(onchain_data_path):
-        for filename in os.listdir(onchain_data_path):
-            # USDT는 제외하고, _60m_20240101_20250630.csv 패턴만 포함
-            if filename.endswith('_60m_20240101_20250630.csv') and filename != 'USDT_60m_20240101_20250630.csv':
-                coin_symbol = filename.split('_')[0]
-                # 고정된 시간 범위 (온체인 데이터 파일명에서 추출)
-                start = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
-                end = pd.Timestamp("2025-06-30 23:00:00", tz="UTC")
-                data_info.append((coin_symbol, start, end))
-
-    # 정렬하여 반환
-    data_info.sort(key=lambda x: x[0])
-    return data_info
+    info: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
+    for symbol, start, end in rows:
+        if not start or not end:
+            continue
+        simple_symbol = symbol.split("-", 1)[-1]
+        start_ts = pd.Timestamp(start).tz_localize(KST).tz_convert("UTC")
+        end_ts = pd.Timestamp(end).tz_localize(KST).tz_convert("UTC")
+        info.append((simple_symbol, start_ts, end_ts))
+    info.sort(key=lambda x: x[0])
+    return info
 
 def get_model_meta_info(model_name: str, coin_symbol: str, timeframe: int) -> dict:
     data_path = _get_data_path()
@@ -118,24 +126,54 @@ def get_ohlcv_df(coin_symbol: str, timeframe: int) -> pd.DataFrame:
     return df
 
 def get_total_df(coin_symbol: str) -> pd.DataFrame:
-    data_path = _get_data_path()
-    ohlcv_data_path = os.path.join(data_path, 'ohlcv')
-    ohlcv_file_path = os.path.join(ohlcv_data_path, f'binance_ohlcv_1h_{coin_symbol}USDT_20240101_20250630_utc.csv')
-    ohlcv_df = pd.read_csv(ohlcv_file_path, parse_dates=["datetime_utc"])
-    ohlcv_df['price'] = ohlcv_df['close']
+    from app.db.database import SessionLocal
+    from app.db import models
 
-    onchain_data_path = os.path.join(data_path, 'onchain')
-    cur_onchain_data_path = os.path.join(onchain_data_path, f'{coin_symbol}_60m_20240101_20250630.csv')
-    usdt_onchain_data_path = os.path.join(onchain_data_path, f'USDT_60m_20240101_20250630.csv')
-    cur_onchain_df = pd.read_csv(cur_onchain_data_path, parse_dates=["hour"])
-    usdt_onchain_df = pd.read_csv(usdt_onchain_data_path, parse_dates=["hour"])
-    
-    ohlcv_df["datetime_utc"] = pd.to_datetime(ohlcv_df["datetime_utc"], utc=True)
-    ohlcv_df = ohlcv_df.set_index("datetime_utc").sort_index()
-    usdt_onchain_df["hour"] = pd.to_datetime(usdt_onchain_df["hour"], utc=True)
-    usdt_onchain_df = usdt_onchain_df.set_index("hour").sort_index()
-    cur_onchain_df["hour"] = pd.to_datetime(cur_onchain_df["hour"], utc=True)
-    cur_onchain_df = cur_onchain_df.set_index("hour").sort_index()
+    session = SessionLocal()
+    try:
+        bin_symbol = f"{coin_symbol.upper()}USDT"
+        bin_rows = (
+            session.execute(
+                select(models.BinanceOHLCV)
+                .where(models.BinanceOHLCV.symbol == bin_symbol)
+                .order_by(models.BinanceOHLCV.timestamp.asc())
+            )
+            .scalars()
+            .all()
+        )
+        if not bin_rows:
+            raise ValueError(f"No Binance OHLCV data for {bin_symbol}")
+
+        target_symbol = f"KRW-{coin_symbol.upper()}"
+        cur_rows = (
+            session.execute(
+                select(models.Onchain)
+                .where(models.Onchain.symbol == target_symbol)
+                .order_by(models.Onchain.hour.asc())
+            )
+            .scalars()
+            .all()
+        )
+        if not cur_rows:
+            raise ValueError(f"No onchain data for {target_symbol}")
+
+        usdt_rows = (
+            session.execute(
+                select(models.Onchain)
+                .where(models.Onchain.symbol == "KRW-USDT")
+                .order_by(models.Onchain.hour.asc())
+            )
+            .scalars()
+            .all()
+        )
+        if not usdt_rows:
+            raise ValueError("No onchain data for KRW-USDT")
+    finally:
+        session.close()
+
+    ohlcv_df = _binance_rows_to_df(bin_rows)
+    cur_onchain_df = _onchain_rows_to_df(cur_rows)
+    usdt_onchain_df = _onchain_rows_to_df(usdt_rows)
     usdt_onchain_df.columns = [f"usdt_{col}" for col in usdt_onchain_df.columns]
 
     data_df = (
@@ -144,6 +182,61 @@ def get_total_df(coin_symbol: str) -> pd.DataFrame:
         .merge(usdt_onchain_df, left_index=True, right_index=True, how="inner")
     )
     return data_df
+
+
+def _kst_naive_to_utc(moment: datetime) -> pd.Timestamp:
+    ts = pd.Timestamp(moment)
+    if ts.tzinfo is None or ts.tzinfo.utcoffset(ts) is None:
+        ts = ts.tz_localize(KST)
+    else:
+        ts = ts.tz_convert(KST)
+    return ts.tz_convert("UTC")
+
+
+def _binance_rows_to_df(rows) -> pd.DataFrame:
+    records: list[dict] = []
+    for row in rows:
+        records.append(
+            {
+                "datetime_utc": _kst_naive_to_utc(row.timestamp),
+                "open": float(row.open_price),
+                "high": float(row.high_price),
+                "low": float(row.low_price),
+                "close": float(row.close_price),
+                "volume": float(row.volume),
+                "trade_count": int(row.trade_count),
+                "price": float(row.close_price),
+            }
+        )
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+    return df.set_index("datetime_utc").sort_index()
+
+
+def _onchain_rows_to_df(rows) -> pd.DataFrame:
+    records: list[dict] = []
+    for row in rows:
+        records.append(
+            {
+                "datetime_utc": _kst_naive_to_utc(row.hour),
+                "total_volume": float(row.total_volume),
+                "total_tx_count": float(row.total_tx_count),
+                "cex_inflow": float(row.cex_inflow),
+                "cex_outflow": float(row.cex_outflow),
+                "cex_tx_count": float(row.cex_tx_count),
+                "dex_inflow": float(row.dex_inflow),
+                "dex_outflow": float(row.dex_outflow),
+                "dex_tx_count": float(row.dex_tx_count),
+                "inst_inflow": float(row.inst_inflow),
+                "inst_outflow": float(row.inst_outflow),
+                "inst_tx_count": float(row.inst_tx_count),
+            }
+        )
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+    return df.set_index("datetime_utc").sort_index()
 
 def fetch_binance_klines(symbol: str, start_dt_utc: datetime, end_dt_utc: datetime,
                          interval: str = "1h", limit: int = 1000, sleep_sec: float = 0.12) -> pd.DataFrame:
